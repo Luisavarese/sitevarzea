@@ -1,0 +1,237 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "A user of the application, either an admin or a team manager.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "description": "Firebase Auth UID" },
+        "email": { "type": "string", "format": "email" },
+        "displayName": { "type": "string" },
+        "photoURL": { "type": "string" },
+        "role": { "type": "string", "enum": ["admin", "manager"] },
+        "teamId": { "type": "string", "description": "ID of the team managed by this user (if manager)" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "email", "role", "createdAt"]
+    },
+    "Team": {
+      "title": "Team",
+      "description": "A soccer team profile.",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "logoUrl": { "type": "string" },
+        "managerId": { "type": "string", "description": "UID of the user who manages this team" },
+        "city": { "type": "string" },
+        "neighborhood": { "type": "string" },
+        "stats": {
+          "type": "object",
+          "properties": {
+            "wins": { "type": "number" },
+            "draws": { "type": "number" },
+            "losses": { "type": "number" },
+            "goalsFor": { "type": "number" },
+            "goalsAgainst": { "type": "number" },
+            "points": { "type": "number" }
+          }
+        },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name", "managerId", "stats", "createdAt"]
+    },
+    "Player": {
+      "title": "Player",
+      "description": "A player belonging to a team.",
+      "type": "object",
+      "properties": {
+        "teamId": { "type": "string" },
+        "name": { "type": "string" },
+        "position": { "type": "string" },
+        "number": { "type": "number" },
+        "stats": {
+          "type": "object",
+          "properties": {
+            "goals": { "type": "number" },
+            "yellowCards": { "type": "number" },
+            "redCards": { "type": "number" }
+          }
+        },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["teamId", "name", "stats", "createdAt"]
+    },
+    "Availability": {
+      "title": "Availability",
+      "description": "A time slot when a team is available to play.",
+      "type": "object",
+      "properties": {
+        "teamId": { "type": "string" },
+        "dayOfWeek": { "type": "number", "description": "0 (Sunday) to 6 (Saturday)" },
+        "startTime": { "type": "string", "description": "HH:mm format" },
+        "endTime": { "type": "string", "description": "HH:mm format" },
+        "location": { "type": "string" },
+        "type": { "type": "string", "enum": ["home", "away", "both"] },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["teamId", "dayOfWeek", "startTime", "endTime", "type", "createdAt"]
+    },
+    "Match": {
+      "title": "Match",
+      "description": "A scheduled or completed match between two teams.",
+      "type": "object",
+      "properties": {
+        "homeTeamId": { "type": "string" },
+        "awayTeamId": { "type": "string" },
+        "date": { "type": "string", "format": "date-time" },
+        "location": { "type": "string" },
+        "status": { "type": "string", "enum": ["pending", "confirmed", "completed", "cancelled"] },
+        "homeScore": { "type": "number" },
+        "awayScore": { "type": "number" },
+        "quadros": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "homeScore": { "type": "number" },
+              "awayScore": { "type": "number" }
+            }
+          }
+        },
+        "opponentRating": { "type": "number" },
+        "courtRating": { "type": "number" },
+        "competitionId": { "type": "string" },
+        "scheduledById": { "type": "string", "description": "UID of the manager who requested the match" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["homeTeamId", "awayTeamId", "date", "status", "scheduledById", "createdAt"]
+    },
+    "Competition": {
+      "title": "Competition",
+      "description": "A league, cup, or festival created by an admin.",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "type": { "type": "string", "enum": ["league", "cup", "festival"] },
+        "startDate": { "type": "string", "format": "date-time" },
+        "endDate": { "type": "string", "format": "date-time" },
+        "status": { "type": "string", "enum": ["upcoming", "ongoing", "completed"] },
+        "adminId": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name", "type", "status", "adminId", "createdAt"]
+    },
+    "Banner": {
+      "title": "Banner",
+      "description": "A promotional or sponsor banner for the home screen.",
+      "type": "object",
+      "properties": {
+        "imageUrl": { "type": "string" },
+        "link": { "type": "string" },
+        "type": { "type": "string", "enum": ["promo", "sponsor"] },
+        "active": { "type": "boolean" },
+        "order": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["imageUrl", "type", "active", "createdAt"]
+    }
+    "TeamBlock": {
+      "title": "TeamBlock",
+      "description": "A specific date when a team is not available to play.",
+      "type": "object",
+      "properties": {
+        "teamId": { "type": "string" },
+        "date": { "type": "string", "description": "YYYY-MM-DD format" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["teamId", "date", "createdAt"]
+    },
+    "Notification": {
+      "title": "Notification",
+      "description": "In-app notifications for users.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "title": { "type": "string" },
+        "message": { "type": "string" },
+        "link": { "type": "string" },
+        "type": { "type": "string", "enum": ["info", "success", "warning", "error"] },
+        "read": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "title", "message", "read", "createdAt"]
+    },
+    "Mail": {
+      "title": "Mail",
+      "description": "Emails to be sent via Firebase Trigger Email extension.",
+      "type": "object",
+      "properties": {
+        "to": { "type": "string", "format": "email" },
+        "message": {
+          "type": "object",
+          "properties": {
+            "subject": { "type": "string" },
+            "html": { "type": "string" }
+          }
+        }
+      },
+      "required": ["to", "message"]
+    },
+    "SmsMessage": {
+      "title": "SmsMessage",
+      "description": "SMS messages to be sent via Firebase Twilio Send Message extension.",
+      "type": "object",
+      "properties": {
+        "to": { "type": "string" },
+        "body": { "type": "string" }
+      },
+      "required": ["to", "body"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/User" },
+      "description": "User profiles."
+    },
+    "/teams/{teamId}": {
+      "schema": { "$ref": "#/entities/Team" },
+      "description": "Team profiles."
+    },
+    "/players/{playerId}": {
+      "schema": { "$ref": "#/entities/Player" },
+      "description": "Players registered to teams."
+    },
+    "/availabilities/{availabilityId}": {
+      "schema": { "$ref": "#/entities/Availability" },
+      "description": "Team availability slots for scheduling."
+    },
+    "/matches/{matchId}": {
+      "schema": { "$ref": "#/entities/Match" },
+      "description": "Matches between teams."
+    },
+    "/competitions/{competitionId}": {
+      "schema": { "$ref": "#/entities/Competition" },
+      "description": "Leagues, cups, and festivals."
+    },
+    "/banners/{bannerId}": {
+      "schema": { "$ref": "#/entities/Banner" },
+      "description": "Banners and sponsors for the home screen."
+    },
+    "/teamBlocks/{blockId}": {
+      "schema": { "$ref": "#/entities/TeamBlock" },
+      "description": "Blocked dates for teams."
+    },
+    "/notifications/{notificationId}": {
+      "schema": { "$ref": "#/entities/Notification" },
+      "description": "In-app notifications for users."
+    },
+    "/mail/{mailId}": {
+      "schema": { "$ref": "#/entities/Mail" },
+      "description": "Emails to be sent via Firebase Trigger Email extension."
+    },
+    "/messages/{messageId}": {
+      "schema": { "$ref": "#/entities/SmsMessage" },
+      "description": "SMS messages to be sent via Firebase Twilio Send Message extension."
+    }
+  }
+}

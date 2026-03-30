@@ -1,0 +1,247 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+    
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    function isAdmin() {
+      return isAuthenticated() && (
+        (request.auth.token.email == "luis.silva.avarese@gmail.com") ||
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin')
+      );
+    }
+    
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+    
+    function isTeamManager(teamId) {
+      return isAuthenticated() && exists(/databases/$(database)/documents/teams/$(teamId)) && get(/databases/$(database)/documents/teams/$(teamId)).data.managerId == request.auth.uid;
+    }
+
+    function hasRequiredFields(fields) {
+      return request.resource.data.keys().hasAll(fields);
+    }
+
+    function hasOnlyAllowedFields(fields) {
+      return request.resource.data.keys().hasOnly(fields);
+    }
+
+    function areImmutableFieldsUnchanged(fields) {
+      return !request.resource.data.diff(resource.data).affectedKeys().hasAny(fields);
+    }
+
+    // ===============================================================
+    // Domain Validators
+    // ===============================================================
+
+    function isValidUser() {
+      return hasRequiredFields(['uid', 'email', 'role']) &&
+             request.resource.data.uid == request.auth.uid &&
+             request.resource.data.email is string &&
+             request.resource.data.role in ['admin', 'manager'] &&
+             (!('createdAt' in request.resource.data) || request.resource.data.createdAt is string);
+    }
+
+    function isValidTeam() {
+      return hasRequiredFields(['name', 'managerId', 'stats', 'createdAt']) &&
+             request.resource.data.name is string && request.resource.data.name.size() > 0 && request.resource.data.name.size() < 100 &&
+             request.resource.data.managerId == request.auth.uid &&
+             request.resource.data.stats is map &&
+             request.resource.data.createdAt is string;
+    }
+
+    function isValidPlayer() {
+      return hasRequiredFields(['teamId', 'name', 'stats', 'createdAt']) &&
+             request.resource.data.teamId is string &&
+             request.resource.data.name is string && request.resource.data.name.size() > 0 && request.resource.data.name.size() < 100 &&
+             request.resource.data.stats is map &&
+             request.resource.data.createdAt is string;
+    }
+
+    function isValidAvailability() {
+      return hasRequiredFields(['teamId', 'dayOfWeek', 'startTime', 'endTime', 'type', 'createdAt']) &&
+             request.resource.data.teamId is string &&
+             request.resource.data.dayOfWeek is number && request.resource.data.dayOfWeek >= 0 && request.resource.data.dayOfWeek <= 6 &&
+             request.resource.data.startTime is string && request.resource.data.startTime.matches('^\\d{1,2}:\\d{2}(:\\d{2})?$') &&
+             request.resource.data.endTime is string && request.resource.data.endTime.matches('^\\d{1,2}:\\d{2}(:\\d{2})?$') &&
+             request.resource.data.type in ['home', 'away', 'both'] &&
+             request.resource.data.createdAt is string;
+    }
+
+    function isValidMatch() {
+      return hasRequiredFields(['homeTeamId', 'awayTeamId', 'date', 'status', 'scheduledById', 'createdAt']) &&
+             request.resource.data.homeTeamId is string &&
+             request.resource.data.awayTeamId is string &&
+             request.resource.data.date is string &&
+             request.resource.data.status in ['pending', 'confirmed', 'completed', 'cancelled'] &&
+             request.resource.data.scheduledById == request.auth.uid &&
+             request.resource.data.createdAt is string &&
+             (!('quadros' in request.resource.data) || request.resource.data.quadros is list) &&
+             (!('opponentRating' in request.resource.data) || request.resource.data.opponentRating is number) &&
+             (!('courtRating' in request.resource.data) || request.resource.data.courtRating is number);
+    }
+
+    function isValidCompetition() {
+      return hasRequiredFields(['name', 'type', 'status', 'adminId', 'createdAt']) &&
+             request.resource.data.name is string && request.resource.data.name.size() > 0 && request.resource.data.name.size() < 100 &&
+             request.resource.data.type in ['league', 'cup', 'festival'] &&
+             request.resource.data.status in ['upcoming', 'ongoing', 'completed'] &&
+             request.resource.data.adminId == request.auth.uid &&
+             request.resource.data.createdAt is string &&
+             (!('festivalGames' in request.resource.data) || request.resource.data.festivalGames is list);
+    }
+
+    function isValidBanner() {
+      return hasRequiredFields(['imageUrl', 'type', 'active', 'createdAt']) &&
+             request.resource.data.imageUrl is string && request.resource.data.imageUrl.size() < 1000000 &&
+             request.resource.data.type in ['promo', 'sponsor'] &&
+             request.resource.data.active is bool &&
+             request.resource.data.createdAt is string;
+    }
+
+    function isValidTeamBlock() {
+      return hasRequiredFields(['teamId', 'date', 'createdAt']) &&
+             request.resource.data.teamId is string &&
+             request.resource.data.date is string && request.resource.data.date.matches('^\\d{4}-\\d{2}-\\d{2}$') &&
+             request.resource.data.createdAt is string;
+    }
+
+    function isValidNotification() {
+      return hasRequiredFields(['userId', 'title', 'message', 'read', 'createdAt']) &&
+             request.resource.data.userId is string &&
+             request.resource.data.title is string && request.resource.data.title.size() > 0 && request.resource.data.title.size() < 200 &&
+             request.resource.data.message is string && request.resource.data.message.size() > 0 && request.resource.data.message.size() < 1000 &&
+             request.resource.data.read is bool &&
+             request.resource.data.createdAt is string &&
+             (!('link' in request.resource.data) || request.resource.data.link == null || (request.resource.data.link is string && request.resource.data.link.size() < 500)) &&
+             (!('type' in request.resource.data) || request.resource.data.type in ['info', 'success', 'warning', 'error']);
+    }
+
+    function isValidMail() {
+      return hasRequiredFields(['to', 'message']) &&
+             request.resource.data.to is string && request.resource.data.to.matches("^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$") &&
+             request.resource.data.message is map &&
+             request.resource.data.message.keys().hasAll(['subject', 'html']) &&
+             request.resource.data.message.subject is string && request.resource.data.message.subject.size() < 200 &&
+             request.resource.data.message.html is string && request.resource.data.message.html.size() < 10000;
+    }
+
+    function isValidSmsMessage() {
+      return hasRequiredFields(['to', 'body']) &&
+             request.resource.data.to is string && request.resource.data.to.size() > 0 && request.resource.data.to.size() < 50 &&
+             request.resource.data.body is string && request.resource.data.body.size() > 0 && request.resource.data.body.size() < 1600;
+    }
+
+    function isValidFestivalGame() {
+      return hasRequiredFields(['competitionId', 'date', 'startTime', 'endTime', 'createdAt']) &&
+             request.resource.data.competitionId is string &&
+             request.resource.data.date is string &&
+             request.resource.data.startTime is string &&
+             request.resource.data.endTime is string &&
+             request.resource.data.createdAt is string &&
+             (!('homeTeamId' in request.resource.data) || request.resource.data.homeTeamId == null || request.resource.data.homeTeamId is string) &&
+             (!('homeTeamName' in request.resource.data) || request.resource.data.homeTeamName == null || request.resource.data.homeTeamName is string) &&
+             (!('awayTeamId' in request.resource.data) || request.resource.data.awayTeamId == null || request.resource.data.awayTeamId is string) &&
+             (!('awayTeamName' in request.resource.data) || request.resource.data.awayTeamName == null || request.resource.data.awayTeamName is string) &&
+             (!('quadros' in request.resource.data) || request.resource.data.quadros is list) &&
+             (!('opponentRating' in request.resource.data) || request.resource.data.opponentRating is number) &&
+             (!('courtRating' in request.resource.data) || request.resource.data.courtRating is number);
+    }
+
+    // ===============================================================
+    // Rules
+    // ===============================================================
+
+    match /users/{userId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && isOwner(userId) && isValidUser() && (isAdmin() || request.resource.data.role == 'manager');
+      allow update: if isAuthenticated() && isOwner(userId) && isValidUser() && areImmutableFieldsUnchanged(['uid', 'createdAt']) && (isAdmin() || request.resource.data.role == resource.data.role);
+    }
+
+    match /teams/{teamId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && isValidTeam();
+      allow update: if isAuthenticated() && (isAdmin() || (isTeamManager(teamId) && areImmutableFieldsUnchanged(['managerId', 'createdAt'])));
+    }
+
+    match /players/{playerId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && isTeamManager(request.resource.data.teamId) && isValidPlayer();
+      allow update: if isAuthenticated() && (isAdmin() || isTeamManager(resource.data.teamId)) && areImmutableFieldsUnchanged(['teamId', 'createdAt']);
+      allow delete: if isAuthenticated() && (isAdmin() || isTeamManager(resource.data.teamId));
+    }
+
+    match /availabilities/{availabilityId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && isTeamManager(request.resource.data.teamId) && isValidAvailability();
+      allow update: if isAuthenticated() && isTeamManager(resource.data.teamId) && areImmutableFieldsUnchanged(['teamId', 'createdAt']);
+      allow delete: if isAuthenticated() && isTeamManager(resource.data.teamId);
+    }
+
+    match /matches/{matchId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && isValidMatch() && (isTeamManager(request.resource.data.homeTeamId) || isTeamManager(request.resource.data.awayTeamId));
+      allow update: if isAuthenticated() && (isAdmin() || isTeamManager(resource.data.homeTeamId) || isTeamManager(resource.data.awayTeamId)) && areImmutableFieldsUnchanged(['homeTeamId', 'awayTeamId', 'scheduledById', 'createdAt']);
+      allow delete: if isAdmin();
+    }
+
+    match /competitions/{competitionId} {
+      allow read: if isAuthenticated();
+      allow create: if isAdmin() && isValidCompetition();
+      allow update: if isAdmin() && areImmutableFieldsUnchanged(['adminId', 'createdAt']);
+      allow delete: if isAdmin();
+    }
+
+    match /banners/{bannerId} {
+      allow read: if isAuthenticated();
+      allow create: if isAdmin() && isValidBanner();
+      allow update: if isAdmin() && areImmutableFieldsUnchanged(['createdAt']);
+      allow delete: if isAdmin();
+    }
+
+    match /teamBlocks/{blockId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && isTeamManager(request.resource.data.teamId) && isValidTeamBlock();
+      allow update: if isAuthenticated() && isTeamManager(resource.data.teamId) && areImmutableFieldsUnchanged(['teamId', 'createdAt']);
+      allow delete: if isAuthenticated() && isTeamManager(resource.data.teamId);
+    }
+
+    match /notifications/{notificationId} {
+      allow read: if isAuthenticated() && (isAdmin() || isOwner(resource.data.userId));
+      allow create: if isAuthenticated() && isValidNotification();
+      allow update: if isAuthenticated() && isOwner(resource.data.userId) && areImmutableFieldsUnchanged(['userId', 'title', 'message', 'link', 'type', 'createdAt']);
+      allow delete: if isAuthenticated() && (isAdmin() || isOwner(resource.data.userId));
+    }
+
+    match /mail/{mailId} {
+      allow create: if isAuthenticated() && isValidMail();
+      allow read, update, delete: if false; // Only the extension needs to read/update/delete
+    }
+
+    match /messages/{messageId} {
+      allow create: if isAuthenticated() && isValidSmsMessage();
+      allow read, delete: if isAdmin();
+      allow update: if false;
+    }
+
+    match /festivalGames/{gameId} {
+      allow read: if isAuthenticated();
+      allow create: if isAdmin() && isValidFestivalGame();
+      allow update: if isAdmin() || (isAuthenticated() && areImmutableFieldsUnchanged(['competitionId', 'date', 'startTime', 'endTime', 'createdAt']));
+      allow delete: if isAdmin();
+    }
+
+    match /settings/{settingId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+  }
+}

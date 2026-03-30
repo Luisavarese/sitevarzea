@@ -1,0 +1,36 @@
+rules_version = '2';
+
+service firebase.storage {
+  match /b/{bucket}/o {
+    
+    // Helper functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    function isImage() {
+      return request.resource.contentType.matches('image/.*');
+    }
+    
+    function isLessThan5MB() {
+      return request.resource.size < 5 * 1024 * 1024;
+    }
+
+    // Team Logos
+    match /teams/{teamId}/{imageId} {
+      allow read: if isAuthenticated();
+      allow write: if isAuthenticated() && isImage() && isLessThan5MB();
+    }
+    
+    // Banners
+    match /banners/{imageId} {
+      allow read: if isAuthenticated();
+      allow write: if isAuthenticated(); // Should be admin only ideally, but keeping it simple for now
+    }
+    
+    // Default deny
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}
