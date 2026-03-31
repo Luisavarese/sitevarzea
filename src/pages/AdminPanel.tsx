@@ -2,9 +2,9 @@ import { useState, useEffect, FormEvent, ChangeEvent } from 'react';
 import { collection, query, getDocs, addDoc, updateDoc, deleteDoc, doc, getDoc, setDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
-import { Shield, Plus, Image as ImageIcon, Trash2, Edit2, Trophy, Check, X, Users, Activity, Calendar as CalendarIcon, Upload, DollarSign } from 'lucide-react';
+import { Shield, Plus, Image as ImageIcon, Trash2, Edit2, Trophy, Check, X, Users, Activity, Calendar as CalendarIcon, Upload, DollarSign, Search as SearchIcon } from 'lucide-react';
 import { cn } from '../lib/utils';
-import { format, addMonths, isSameMonth } from 'date-fns';
+import { format, addMonths, isSameMonth, startOfWeek } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import { ComposedChart, Line, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 
@@ -70,6 +70,7 @@ interface Match {
   status: 'pending' | 'confirmed' | 'completed' | 'cancelled';
   cancelReason?: string;
   collectionName?: string;
+  rankingStatus?: 'contabilizado' | 'descartado' | 'mandante' | 'visitante';
 }
 
 export function AdminPanel() {
@@ -104,6 +105,7 @@ export function AdminPanel() {
   const [cancelReason, setCancelReason] = useState('');
   const [isCancelingMatch, setIsCancelingMatch] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
+  const [matchSearch, setMatchSearch] = useState('');
   const matchesPerPage = 10;
 
   // Financial Control
@@ -136,10 +138,27 @@ export function AdminPanel() {
     prize: ''
   });
 
+  const [rankingConfig, setRankingConfig] = useState({
+    startDate: '',
+    endDate: '',
+    prizes: {
+      nacional: '',
+      estadual: '',
+      municipal: '',
+      zonaLeste: '',
+      zonaOeste: '',
+      zonaNorte: '',
+      zonaSul: '',
+      zonaCentro: ''
+    }
+  });
+  const [isSavingRanking, setIsSavingRanking] = useState(false);
+
   // Modals & Toasts
   const [confirmDeleteBanner, setConfirmDeleteBanner] = useState<string | null>(null);
   const [confirmDeleteComp, setConfirmDeleteComp] = useState<string | null>(null);
   const [confirmDeleteHistory, setConfirmDeleteHistory] = useState(false);
+  const [confirmDeleteRanking, setConfirmDeleteRanking] = useState(false);
   const [isDeletingHistory, setIsDeletingHistory] = useState(false);
   const [toastMessage, setToastMessage] = useState<{title: string, type: 'success' | 'error'} | null>(null);
 
@@ -151,13 +170,14 @@ export function AdminPanel() {
   useEffect(() => {
     async function fetchData() {
       try {
-        const [bannersSnap, compsSnap, teamsSnap, matchesSnap, festivalSnap, settingsSnap] = await Promise.all([
+        const [bannersSnap, compsSnap, teamsSnap, matchesSnap, festivalSnap, settingsSnap, rankingSnap] = await Promise.all([
           getDocs(collection(db, 'banners')),
           getDocs(collection(db, 'competitions')),
           getDocs(collection(db, 'teams')),
           getDocs(collection(db, 'matches')),
           getDocs(collection(db, 'festivalGames')),
-          getDoc(doc(db, 'settings', 'general'))
+          getDoc(doc(db, 'settings', 'general')),
+          getDoc(doc(db, 'settings', 'ranking'))
         ]);
         
         setBanners(bannersSnap.docs.map(d => ({ id: d.id, ...d.data() } as Banner)));
@@ -169,10 +189,29 @@ export function AdminPanel() {
           if (settingsSnap.data().annualFeeAway) setAnnualFeeAway(settingsSnap.data().annualFeeAway);
         }
 
+        if (rankingSnap.exists()) {
+          const data = rankingSnap.data();
+          setRankingConfig({
+            startDate: data.startDate || '',
+            endDate: data.endDate || '',
+            prizes: {
+              nacional: data.prizes?.nacional || '',
+              estadual: data.prizes?.estadual || '',
+              municipal: data.prizes?.municipal || '',
+              zonaLeste: data.prizes?.zonaLeste || '',
+              zonaOeste: data.prizes?.zonaOeste || '',
+              zonaNorte: data.prizes?.zonaNorte || '',
+              zonaSul: data.prizes?.zonaSul || '',
+              zonaCentro: data.prizes?.zonaCentro || ''
+            }
+          });
+        }
+
         const teams = teamsSnap.docs.map(d => ({ id: d.id, ...d.data() } as Team));
         const regularMatches = matchesSnap.docs.map(d => ({ id: d.id, collectionName: 'matches', ...d.data() } as Match));
         const festivalMatches = festivalSnap.docs.map(d => ({ id: d.id, collectionName: 'festivalGames', ...d.data() } as Match));
-        const combinedMatches = [...regularMatches, ...festivalMatches].map(match => {
+        
+        let combinedMatches = [...regularMatches, ...festivalMatches].map(match => {
           const homeTeam = teams.find(t => t.id === match.homeTeamId);
           const awayTeam = teams.find(t => t.id === match.awayTeamId);
           return {
@@ -180,7 +219,66 @@ export function AdminPanel() {
             homeTeamName: homeTeam?.name || match.homeTeamName || 'Time Excluído',
             awayTeamName: awayTeam?.name || match.awayTeamName || 'Time Excluído'
           };
-        }).sort((a, b) => {
+        });
+
+        // Calculate ranking status
+        const teamWeeksPlayed = new Map<string, Set<string>>();
+        const sortedForRanking = [...combinedMatches].sort((a, b) => {
+          const timeA = a.date && !isNaN(new Date(a.date).getTime()) ? new Date(a.date).getTime() : 0;
+          const timeB = b.date && !isNaN(new Date(b.date).getTime()) ? new Date(b.date).getTime() : 0;
+          return timeA - timeB; // Ascending for chronological processing
+        });
+
+        sortedForRanking.forEach(match => {
+          if (match.status !== 'completed' || match.collectionName === 'festivalGames' || (match as any).isFestival) {
+            match.rankingStatus = 'descartado';
+            return;
+          }
+
+          if (!match.date) {
+            match.rankingStatus = 'descartado';
+            return;
+          }
+
+          // Filter by ranking competition dates if configured
+          if (rankingSnap.exists()) {
+            const rData = rankingSnap.data();
+            if (rData.startDate && match.date < rData.startDate) {
+              match.rankingStatus = 'descartado';
+              return;
+            }
+            if (rData.endDate && match.date > rData.endDate) {
+              match.rankingStatus = 'descartado';
+              return;
+            }
+          }
+
+          const weekStart = startOfWeek(new Date(match.date + 'T12:00:00Z'), { weekStartsOn: 1 });
+          const weekKey = format(weekStart, 'yyyy-MM-dd');
+          
+          if (!teamWeeksPlayed.has(match.homeTeamId)) teamWeeksPlayed.set(match.homeTeamId, new Set());
+          if (!teamWeeksPlayed.has(match.awayTeamId)) teamWeeksPlayed.set(match.awayTeamId, new Set());
+
+          const homePlayedThisWeek = teamWeeksPlayed.get(match.homeTeamId)!.has(weekKey);
+          const awayPlayedThisWeek = teamWeeksPlayed.get(match.awayTeamId)!.has(weekKey);
+
+          if (homePlayedThisWeek && awayPlayedThisWeek) {
+            match.rankingStatus = 'descartado';
+          } else if (!homePlayedThisWeek && !awayPlayedThisWeek) {
+            match.rankingStatus = 'contabilizado';
+            teamWeeksPlayed.get(match.homeTeamId)!.add(weekKey);
+            teamWeeksPlayed.get(match.awayTeamId)!.add(weekKey);
+          } else if (!homePlayedThisWeek) {
+            match.rankingStatus = 'mandante';
+            teamWeeksPlayed.get(match.homeTeamId)!.add(weekKey);
+          } else {
+            match.rankingStatus = 'visitante';
+            teamWeeksPlayed.get(match.awayTeamId)!.add(weekKey);
+          }
+        });
+
+        // Sort back to descending for display
+        combinedMatches = sortedForRanking.sort((a, b) => {
           const timeA = a.date && !isNaN(new Date(a.date).getTime()) ? new Date(a.date).getTime() : 0;
           const timeB = b.date && !isNaN(new Date(b.date).getTime()) ? new Date(b.date).getTime() : 0;
           return timeB - timeA;
@@ -532,15 +630,84 @@ export function AdminPanel() {
     }
   };
 
+  const handleSaveRankingConfig = async (e: FormEvent) => {
+    e.preventDefault();
+    setIsSavingRanking(true);
+    try {
+      await setDoc(doc(db, 'settings', 'ranking'), rankingConfig);
+      showToast("Configuração do ranking salva com sucesso!", "success");
+    } catch (error) {
+      console.error("Error saving ranking config:", error);
+      showToast("Erro ao salvar configuração do ranking.", "error");
+    } finally {
+      setIsSavingRanking(false);
+    }
+  };
+
+  const handleDeleteRankingConfig = () => {
+    setConfirmDeleteRanking(true);
+  };
+
+  const confirmDeleteRankingAction = async () => {
+    setIsSavingRanking(true);
+    try {
+      await deleteDoc(doc(db, 'settings', 'ranking'));
+      setRankingConfig({
+        startDate: '',
+        endDate: '',
+        prizes: {
+          nacional: '',
+          estadual: '',
+          municipal: '',
+          zonaLeste: '',
+          zonaOeste: '',
+          zonaNorte: '',
+          zonaSul: '',
+          zonaCentro: ''
+        }
+      });
+      showToast("Ranking excluído com sucesso!", "success");
+    } catch (error) {
+      console.error("Error deleting ranking config:", error);
+      showToast("Erro ao excluir configuração do ranking.", "error");
+    } finally {
+      setIsSavingRanking(false);
+      setConfirmDeleteRanking(false);
+    }
+  };
+
   if (loading) {
     return <div className="flex justify-center py-12"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-emerald-500"></div></div>;
   }
 
   // Pagination logic
+  const filteredMatches = allMatches.filter(match => {
+    const searchLower = matchSearch.toLowerCase();
+    const homeTeamMatch = match.homeTeamName?.toLowerCase().includes(searchLower);
+    const awayTeamMatch = match.awayTeamName?.toLowerCase().includes(searchLower);
+    const dateMatch = match.date?.includes(searchLower);
+    
+    // Format date for search (e.g., DD/MM/YYYY)
+    let formattedDateMatch = false;
+    if (match.date) {
+      try {
+        const dateObj = new Date(match.date + 'T12:00:00Z');
+        const formatted = format(dateObj, "dd/MM/yyyy", { locale: ptBR });
+        formattedDateMatch = formatted.includes(searchLower);
+      } catch (e) {
+        // ignore
+      }
+    }
+
+    const statusMatch = match.status?.toLowerCase().includes(searchLower);
+    const rankingMatch = match.rankingStatus?.toLowerCase().includes(searchLower);
+    return homeTeamMatch || awayTeamMatch || dateMatch || formattedDateMatch || statusMatch || rankingMatch;
+  });
+
   const indexOfLastMatch = currentPage * matchesPerPage;
   const indexOfFirstMatch = indexOfLastMatch - matchesPerPage;
-  const currentMatches = allMatches.slice(indexOfFirstMatch, indexOfLastMatch);
-  const totalPages = Math.ceil(allMatches.length / matchesPerPage);
+  const currentMatches = filteredMatches.slice(indexOfFirstMatch, indexOfLastMatch);
+  const totalPages = Math.ceil(filteredMatches.length / matchesPerPage);
 
   const formatDate = (dateStr: string) => {
     if (!dateStr) return 'Data Inválida';
@@ -714,10 +881,25 @@ export function AdminPanel() {
 
       {/* Gerenciamento de Jogos */}
       <section className="bg-white p-6 rounded-2xl border border-zinc-200 shadow-sm">
-        <h2 className="text-xl font-semibold flex items-center gap-2 text-zinc-800 mb-6">
-          <CalendarIcon className="w-5 h-5 text-emerald-500" />
-          Gerenciamento de Jogos
-        </h2>
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
+          <h2 className="text-xl font-semibold flex items-center gap-2 text-zinc-800">
+            <CalendarIcon className="w-5 h-5 text-emerald-500" />
+            Gerenciamento de Jogos
+          </h2>
+          <div className="relative w-full sm:w-72">
+            <input
+              type="text"
+              placeholder="Buscar por time, data, status..."
+              value={matchSearch}
+              onChange={(e) => {
+                setMatchSearch(e.target.value);
+                setCurrentPage(1); // Reset page on search
+              }}
+              className="w-full pl-10 pr-4 py-2 border border-zinc-200 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none transition-all"
+            />
+            <SearchIcon className="w-5 h-5 text-zinc-400 absolute left-3 top-1/2 -translate-y-1/2" />
+          </div>
+        </div>
         
         <div className="overflow-x-auto">
           <table className="w-full text-sm text-left">
@@ -727,6 +909,7 @@ export function AdminPanel() {
                 <th className="px-4 py-3 font-medium">Mandante</th>
                 <th className="px-4 py-3 font-medium">Visitante</th>
                 <th className="px-4 py-3 font-medium">Status</th>
+                <th className="px-4 py-3 font-medium">Ranking</th>
                 <th className="px-4 py-3 font-medium text-right">Ações</th>
               </tr>
             </thead>
@@ -750,6 +933,23 @@ export function AdminPanel() {
                        match.status === 'confirmed' ? 'Confirmado' : 
                        match.status === 'cancelled' ? 'Cancelado' : 'Pendente'}
                     </span>
+                  </td>
+                  <td className="px-4 py-3">
+                    {match.status === 'completed' && match.collectionName !== 'festivalGames' ? (
+                      <span className={cn(
+                        "px-2 py-1 text-xs font-medium rounded-full",
+                        match.rankingStatus === 'contabilizado' ? "bg-emerald-100 text-emerald-700" :
+                        match.rankingStatus === 'descartado' ? "bg-red-100 text-red-700" :
+                        "bg-blue-100 text-blue-700"
+                      )}>
+                        {match.rankingStatus === 'contabilizado' ? 'Contabilizado' :
+                         match.rankingStatus === 'descartado' ? 'Descartado' :
+                         match.rankingStatus === 'mandante' ? 'Apenas Mandante' :
+                         match.rankingStatus === 'visitante' ? 'Apenas Visitante' : '-'}
+                      </span>
+                    ) : (
+                      <span className="text-xs text-zinc-400">-</span>
+                    )}
                   </td>
                   <td className="px-4 py-3 text-right">
                     {match.status !== 'cancelled' && (
@@ -775,7 +975,7 @@ export function AdminPanel() {
               <div className="hidden sm:flex-1 sm:flex sm:items-center sm:justify-between">
                 <div>
                   <p className="text-sm text-zinc-700">
-                    Mostrando <span className="font-medium">{indexOfFirstMatch + 1}</span> a <span className="font-medium">{Math.min(indexOfLastMatch, allMatches.length)}</span> de <span className="font-medium">{allMatches.length}</span> resultados
+                    Mostrando <span className="font-medium">{indexOfFirstMatch + 1}</span> a <span className="font-medium">{Math.min(indexOfLastMatch, filteredMatches.length)}</span> de <span className="font-medium">{filteredMatches.length}</span> resultados
                   </p>
                 </div>
                 <div>
@@ -820,6 +1020,147 @@ export function AdminPanel() {
             </div>
           )}
         </div>
+      </section>
+
+      {/* Configurações do Ranking */}
+      <section className="bg-white p-6 rounded-2xl border border-zinc-200 shadow-sm">
+        <h2 className="text-xl font-semibold flex items-center gap-2 text-zinc-800 mb-6">
+          <Trophy className="w-5 h-5 text-yellow-500" />
+          Configuração da Competição do Ranking
+        </h2>
+        
+        <form onSubmit={handleSaveRankingConfig} className="space-y-6">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div>
+              <label className="block text-sm font-medium text-zinc-700 mb-1">Data de Início</label>
+              <input 
+                type="date" 
+                required
+                value={rankingConfig.startDate}
+                onChange={e => setRankingConfig(prev => ({ ...prev, startDate: e.target.value }))}
+                className="w-full p-2 border border-zinc-300 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-zinc-700 mb-1">Data de Fim</label>
+              <input 
+                type="date" 
+                required
+                value={rankingConfig.endDate}
+                onChange={e => setRankingConfig(prev => ({ ...prev, endDate: e.target.value }))}
+                className="w-full p-2 border border-zinc-300 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none"
+              />
+            </div>
+          </div>
+
+          <div>
+            <h3 className="text-sm font-medium text-zinc-800 mb-3 border-b border-zinc-100 pb-2">Prêmios por Categoria</h3>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              <div>
+                <label className="block text-xs font-medium text-zinc-500 mb-1">Nacional</label>
+                <input 
+                  type="text" 
+                  placeholder="Ex: Troféu + R$ 10.000"
+                  value={rankingConfig.prizes.nacional}
+                  onChange={e => setRankingConfig(prev => ({ ...prev, prizes: { ...prev.prizes, nacional: e.target.value } }))}
+                  className="w-full p-2 text-sm border border-zinc-300 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-zinc-500 mb-1">Estadual</label>
+                <input 
+                  type="text" 
+                  placeholder="Ex: Troféu + R$ 5.000"
+                  value={rankingConfig.prizes.estadual}
+                  onChange={e => setRankingConfig(prev => ({ ...prev, prizes: { ...prev.prizes, estadual: e.target.value } }))}
+                  className="w-full p-2 text-sm border border-zinc-300 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-zinc-500 mb-1">Municipal</label>
+                <input 
+                  type="text" 
+                  placeholder="Ex: Troféu + R$ 2.000"
+                  value={rankingConfig.prizes.municipal}
+                  onChange={e => setRankingConfig(prev => ({ ...prev, prizes: { ...prev.prizes, municipal: e.target.value } }))}
+                  className="w-full p-2 text-sm border border-zinc-300 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-zinc-500 mb-1">Zona Leste (SP)</label>
+                <input 
+                  type="text" 
+                  placeholder="Ex: Troféu + R$ 1.000"
+                  value={rankingConfig.prizes.zonaLeste}
+                  onChange={e => setRankingConfig(prev => ({ ...prev, prizes: { ...prev.prizes, zonaLeste: e.target.value } }))}
+                  className="w-full p-2 text-sm border border-zinc-300 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-zinc-500 mb-1">Zona Oeste (SP)</label>
+                <input 
+                  type="text" 
+                  placeholder="Ex: Troféu + R$ 1.000"
+                  value={rankingConfig.prizes.zonaOeste}
+                  onChange={e => setRankingConfig(prev => ({ ...prev, prizes: { ...prev.prizes, zonaOeste: e.target.value } }))}
+                  className="w-full p-2 text-sm border border-zinc-300 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-zinc-500 mb-1">Zona Norte (SP)</label>
+                <input 
+                  type="text" 
+                  placeholder="Ex: Troféu + R$ 1.000"
+                  value={rankingConfig.prizes.zonaNorte}
+                  onChange={e => setRankingConfig(prev => ({ ...prev, prizes: { ...prev.prizes, zonaNorte: e.target.value } }))}
+                  className="w-full p-2 text-sm border border-zinc-300 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-zinc-500 mb-1">Zona Sul (SP)</label>
+                <input 
+                  type="text" 
+                  placeholder="Ex: Troféu + R$ 1.000"
+                  value={rankingConfig.prizes.zonaSul}
+                  onChange={e => setRankingConfig(prev => ({ ...prev, prizes: { ...prev.prizes, zonaSul: e.target.value } }))}
+                  className="w-full p-2 text-sm border border-zinc-300 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-zinc-500 mb-1">Centro (SP)</label>
+                <input 
+                  type="text" 
+                  placeholder="Ex: Troféu + R$ 1.000"
+                  value={rankingConfig.prizes.zonaCentro}
+                  onChange={e => setRankingConfig(prev => ({ ...prev, prizes: { ...prev.prizes, zonaCentro: e.target.value } }))}
+                  className="w-full p-2 text-sm border border-zinc-300 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none"
+                />
+              </div>
+            </div>
+          </div>
+
+          <div className="flex justify-between pt-4 border-t border-zinc-100">
+            <button 
+              type="button"
+              onClick={handleDeleteRankingConfig}
+              disabled={isSavingRanking}
+              className="px-4 py-2 text-red-600 font-medium rounded-lg hover:bg-red-50 transition-colors disabled:opacity-50"
+            >
+              Excluir Competição de Ranking
+            </button>
+            <button 
+              type="submit"
+              disabled={isSavingRanking}
+              className="px-6 py-2 bg-emerald-500 text-white font-medium rounded-lg hover:bg-emerald-600 transition-colors disabled:opacity-50 flex items-center gap-2"
+            >
+              {isSavingRanking ? (
+                <><div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div> Salvando...</>
+              ) : (
+                'Salvar Configuração do Ranking'
+              )}
+            </button>
+          </div>
+        </form>
       </section>
 
       {/* Configurações Gerais */}
@@ -1172,6 +1513,37 @@ export function AdminPanel() {
                 className="px-4 py-2 text-sm font-medium text-white bg-red-500 hover:bg-red-600 rounded-lg transition-colors"
               >
                 Remover
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {confirmDeleteRanking && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl p-6 max-w-sm w-full shadow-xl">
+            <h3 className="text-xl font-bold text-zinc-900 mb-2">Excluir Competição de Ranking</h3>
+            <p className="text-zinc-600 mb-6">
+              Tem certeza que deseja excluir a competição do ranking atual? Esta ação apagará as configurações de datas e prêmios.
+            </p>
+            <div className="flex justify-end gap-3">
+              <button 
+                onClick={() => setConfirmDeleteRanking(false)}
+                disabled={isSavingRanking}
+                className="px-4 py-2 text-sm font-medium text-zinc-600 hover:bg-zinc-100 rounded-lg transition-colors disabled:opacity-50"
+              >
+                Cancelar
+              </button>
+              <button 
+                onClick={confirmDeleteRankingAction}
+                disabled={isSavingRanking}
+                className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-red-500 hover:bg-red-600 rounded-lg transition-colors disabled:opacity-50"
+              >
+                {isSavingRanking ? (
+                  <><div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div> Excluindo...</>
+                ) : (
+                  'Excluir'
+                )}
               </button>
             </div>
           </div>

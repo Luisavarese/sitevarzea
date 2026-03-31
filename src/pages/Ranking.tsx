@@ -1,9 +1,10 @@
 import { useState, useEffect } from 'react';
-import { collection, getDocs } from 'firebase/firestore';
+import { collection, getDocs, doc, getDoc } from 'firebase/firestore';
 import { db } from '../firebase';
-import { Trophy, MapPin, Map as MapIcon, Globe, Search } from 'lucide-react';
+import { Trophy, MapPin, Map as MapIcon, Globe, Search, Calendar, Gift } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { useAuth } from '../contexts/AuthContext';
+import { startOfWeek, format } from 'date-fns';
 
 interface Team {
   id: string;
@@ -17,6 +18,7 @@ interface Team {
 
 interface Match {
   id: string;
+  date: string;
   homeTeamId: string;
   awayTeamId: string;
   status: string;
@@ -25,6 +27,28 @@ interface Match {
   awayScore?: number;
   woTeamId?: string;
   isFestival?: boolean;
+  quadros?: {
+    id: string;
+    name: string;
+    homeScore?: number;
+    awayScore?: number;
+    status: string;
+  }[];
+}
+
+interface RankingConfig {
+  startDate: string;
+  endDate: string;
+  prizes: {
+    nacional: string;
+    estadual: string;
+    municipal: string;
+    zonaLeste: string;
+    zonaOeste: string;
+    zonaNorte: string;
+    zonaSul: string;
+    zonaCentro: string;
+  };
 }
 
 interface TeamStats {
@@ -55,6 +79,7 @@ export default function Ranking() {
   const [activeTab, setActiveTab] = useState<'brasil' | 'estadual' | 'municipal'>('brasil');
   const [teams, setTeams] = useState<Team[]>([]);
   const [matches, setMatches] = useState<Match[]>([]);
+  const [rankingConfig, setRankingConfig] = useState<RankingConfig | null>(null);
   const [loading, setLoading] = useState(true);
   const [selectedState, setSelectedState] = useState<string>('');
   const [selectedCity, setSelectedCity] = useState<string>('');
@@ -86,17 +111,39 @@ export default function Ranking() {
   useEffect(() => {
     async function fetchData() {
       try {
-        const teamsSnap = await getDocs(collection(db, 'teams'));
+        const [teamsSnap, matchesSnap, rankingSnap] = await Promise.all([
+          getDocs(collection(db, 'teams')),
+          getDocs(collection(db, 'matches')),
+          getDoc(doc(db, 'settings', 'ranking'))
+        ]);
+        
         const teamsData = teamsSnap.docs.map(d => ({ id: d.id, ...d.data() } as Team));
         setTeams(teamsData);
 
-        const matchesSnap = await getDocs(collection(db, 'matches'));
         // Only include friendly matches (not festivals)
         const matchesData = matchesSnap.docs
           .map(d => ({ id: d.id, ...d.data() } as Match))
           .filter(m => !m.isFestival);
         
         setMatches(matchesData);
+
+        if (rankingSnap.exists()) {
+          const data = rankingSnap.data();
+          setRankingConfig({
+            startDate: data.startDate || '',
+            endDate: data.endDate || '',
+            prizes: {
+              nacional: data.prizes?.nacional || '',
+              estadual: data.prizes?.estadual || '',
+              municipal: data.prizes?.municipal || '',
+              zonaLeste: data.prizes?.zonaLeste || '',
+              zonaOeste: data.prizes?.zonaOeste || '',
+              zonaNorte: data.prizes?.zonaNorte || '',
+              zonaSul: data.prizes?.zonaSul || '',
+              zonaCentro: data.prizes?.zonaCentro || ''
+            }
+          });
+        }
 
         if (activeTeamId) {
           const activeTeam = teamsData.find(t => t.id === activeTeamId);
@@ -124,6 +171,7 @@ export default function Ranking() {
 
   const calculateStats = (): TeamStats[] => {
     const statsMap = new Map<string, TeamStats>();
+    const teamWeeksPlayed = new Map<string, Set<string>>();
 
     // Initialize stats for all teams
     teams.forEach(team => {
@@ -138,97 +186,161 @@ export default function Ranking() {
         goalsAgainst: 0,
         goalDifference: 0
       });
+      teamWeeksPlayed.set(team.id, new Set());
+    });
+
+    // Sort matches by date ascending
+    const sortedMatches = [...matches].sort((a, b) => {
+      const timeA = a.date && !isNaN(new Date(a.date).getTime()) ? new Date(a.date).getTime() : 0;
+      const timeB = b.date && !isNaN(new Date(b.date).getTime()) ? new Date(b.date).getTime() : 0;
+      return timeA - timeB;
     });
 
     // Calculate stats from matches
-    matches.forEach(match => {
-      if (match.status !== 'completed') return;
+    sortedMatches.forEach(match => {
+      if (match.status !== 'completed' || match.isFestival) return;
+
+      if (!match.date) return; // Skip matches without date
+
+      // Filter by ranking competition dates if configured
+      if (rankingConfig?.startDate && match.date < rankingConfig.startDate) return;
+      if (rankingConfig?.endDate && match.date > rankingConfig.endDate) return;
 
       const homeStats = statsMap.get(match.homeTeamId);
       const awayStats = statsMap.get(match.awayTeamId);
 
       if (!homeStats || !awayStats) return;
 
+      const weekStart = startOfWeek(new Date(match.date + 'T12:00:00Z'), { weekStartsOn: 1 });
+      const weekKey = format(weekStart, 'yyyy-MM-dd');
+      
+      const homePlayedThisWeek = teamWeeksPlayed.get(match.homeTeamId)!.has(weekKey);
+      const awayPlayedThisWeek = teamWeeksPlayed.get(match.awayTeamId)!.has(weekKey);
+
+      if (homePlayedThisWeek && awayPlayedThisWeek) return;
+
+      if (!homePlayedThisWeek) teamWeeksPlayed.get(match.homeTeamId)!.add(weekKey);
+      if (!awayPlayedThisWeek) teamWeeksPlayed.get(match.awayTeamId)!.add(weekKey);
+
       if (match.woTeamId) {
         if (match.resultStatus !== 'confirmed') return;
         
-        homeStats.played += 1;
-        awayStats.played += 1;
+        if (!homePlayedThisWeek) homeStats.played += 1;
+        if (!awayPlayedThisWeek) awayStats.played += 1;
 
         if (match.woTeamId === match.homeTeamId) {
-          homeStats.points -= 3;
-          homeStats.losses += 1;
-          awayStats.points += 3;
-          awayStats.wins += 1;
+          if (!homePlayedThisWeek) {
+            homeStats.points -= 3;
+            homeStats.losses += 1;
+          }
+          if (!awayPlayedThisWeek) {
+            awayStats.points += 3;
+            awayStats.wins += 1;
+          }
         } else if (match.woTeamId === match.awayTeamId) {
-          awayStats.points -= 3;
-          awayStats.losses += 1;
-          homeStats.points += 3;
-          homeStats.wins += 1;
+          if (!awayPlayedThisWeek) {
+            awayStats.points -= 3;
+            awayStats.losses += 1;
+          }
+          if (!homePlayedThisWeek) {
+            homeStats.points += 3;
+            homeStats.wins += 1;
+          }
         }
       } else if (match.quadros && match.quadros.length > 0) {
         match.quadros.forEach(q => {
           if (q.status !== 'confirmed') return;
 
-          homeStats.played += 1;
-          awayStats.played += 1;
+          if (!homePlayedThisWeek) homeStats.played += 1;
+          if (!awayPlayedThisWeek) awayStats.played += 1;
 
           const qHomeGoals = q.homeScore || 0;
           const qAwayGoals = q.awayScore || 0;
 
-          homeStats.goalsFor += qHomeGoals;
-          homeStats.goalsAgainst += qAwayGoals;
-          awayStats.goalsFor += qAwayGoals;
-          awayStats.goalsAgainst += qHomeGoals;
+          if (!homePlayedThisWeek) {
+            homeStats.goalsFor += qHomeGoals;
+            homeStats.goalsAgainst += qAwayGoals;
+          }
+          if (!awayPlayedThisWeek) {
+            awayStats.goalsFor += qAwayGoals;
+            awayStats.goalsAgainst += qHomeGoals;
+          }
 
           if (qHomeGoals > qAwayGoals) {
-            homeStats.points += 3;
-            homeStats.wins += 1;
-            awayStats.losses += 1;
+            if (!homePlayedThisWeek) {
+              homeStats.points += 3;
+              homeStats.wins += 1;
+            }
+            if (!awayPlayedThisWeek) {
+              awayStats.losses += 1;
+            }
           } else if (qAwayGoals > qHomeGoals) {
-            awayStats.points += 3;
-            awayStats.wins += 1;
-            homeStats.losses += 1;
+            if (!awayPlayedThisWeek) {
+              awayStats.points += 3;
+              awayStats.wins += 1;
+            }
+            if (!homePlayedThisWeek) {
+              homeStats.losses += 1;
+            }
           } else {
-            homeStats.points += 1;
-            awayStats.points += 1;
-            homeStats.draws += 1;
-            awayStats.draws += 1;
+            if (!homePlayedThisWeek) {
+              homeStats.points += 1;
+              homeStats.draws += 1;
+            }
+            if (!awayPlayedThisWeek) {
+              awayStats.points += 1;
+              awayStats.draws += 1;
+            }
           }
         });
         
-        homeStats.goalDifference = homeStats.goalsFor - homeStats.goalsAgainst;
-        awayStats.goalDifference = awayStats.goalsFor - awayStats.goalsAgainst;
+        if (!homePlayedThisWeek) homeStats.goalDifference = homeStats.goalsFor - homeStats.goalsAgainst;
+        if (!awayPlayedThisWeek) awayStats.goalDifference = awayStats.goalsFor - awayStats.goalsAgainst;
       } else {
         if (match.resultStatus !== 'confirmed') return;
 
         const homeScore = match.homeScore || 0;
         const awayScore = match.awayScore || 0;
 
-        homeStats.played += 1;
-        awayStats.played += 1;
+        if (!homePlayedThisWeek) {
+          homeStats.played += 1;
+          homeStats.goalsFor += homeScore;
+          homeStats.goalsAgainst += awayScore;
+          homeStats.goalDifference = homeStats.goalsFor - homeStats.goalsAgainst;
+        }
 
-        homeStats.goalsFor += homeScore;
-        homeStats.goalsAgainst += awayScore;
-        homeStats.goalDifference = homeStats.goalsFor - homeStats.goalsAgainst;
-
-        awayStats.goalsFor += awayScore;
-        awayStats.goalsAgainst += homeScore;
-        awayStats.goalDifference = awayStats.goalsFor - awayStats.goalsAgainst;
+        if (!awayPlayedThisWeek) {
+          awayStats.played += 1;
+          awayStats.goalsFor += awayScore;
+          awayStats.goalsAgainst += homeScore;
+          awayStats.goalDifference = awayStats.goalsFor - awayStats.goalsAgainst;
+        }
 
         if (homeScore > awayScore) {
-          homeStats.points += 3;
-          homeStats.wins += 1;
-          awayStats.losses += 1;
+          if (!homePlayedThisWeek) {
+            homeStats.points += 3;
+            homeStats.wins += 1;
+          }
+          if (!awayPlayedThisWeek) {
+            awayStats.losses += 1;
+          }
         } else if (awayScore > homeScore) {
-          awayStats.points += 3;
-          awayStats.wins += 1;
-          homeStats.losses += 1;
+          if (!awayPlayedThisWeek) {
+            awayStats.points += 3;
+            awayStats.wins += 1;
+          }
+          if (!homePlayedThisWeek) {
+            homeStats.losses += 1;
+          }
         } else {
-          homeStats.points += 1;
-          awayStats.points += 1;
-          homeStats.draws += 1;
-          awayStats.draws += 1;
+          if (!homePlayedThisWeek) {
+            homeStats.points += 1;
+            homeStats.draws += 1;
+          }
+          if (!awayPlayedThisWeek) {
+            awayStats.points += 1;
+            awayStats.draws += 1;
+          }
         }
       }
     });
@@ -253,22 +365,56 @@ export default function Ranking() {
       }
     }
 
-    if (searchQuery.trim()) {
-      const query = searchQuery.toLowerCase();
-      stats = stats.filter(s => s.team.name.toLowerCase().includes(query));
-    }
-
     if (selectedGameType) {
       stats = stats.filter(s => s.team.gameType === selectedGameType);
     }
 
     // Sort by points, then goal difference, then goals for, then goals against
-    return stats.sort((a, b) => {
+    stats.sort((a, b) => {
       if (b.points !== a.points) return b.points - a.points;
       if (b.goalDifference !== a.goalDifference) return b.goalDifference - a.goalDifference;
       if (b.goalsFor !== a.goalsFor) return b.goalsFor - a.goalsFor;
       return a.goalsAgainst - b.goalsAgainst;
     });
+
+    // Assign original positions
+    const statsWithPosition = stats.map((stat, index) => ({
+      ...stat,
+      originalPosition: index + 1
+    }));
+
+    if (searchQuery.trim()) {
+      const query = searchQuery.toLowerCase();
+      return statsWithPosition.filter(s => s.team.name.toLowerCase().includes(query));
+    }
+
+    return statsWithPosition;
+  };
+
+  const getCurrentLeaders = () => {
+    let stats = calculateStats();
+    
+    if (selectedGameType) {
+      stats = stats.filter(s => s.team.gameType === selectedGameType);
+    }
+
+    stats.sort((a, b) => {
+      if (b.points !== a.points) return b.points - a.points;
+      if (b.goalDifference !== a.goalDifference) return b.goalDifference - a.goalDifference;
+      if (b.goalsFor !== a.goalsFor) return b.goalsFor - a.goalsFor;
+      return a.goalsAgainst - b.goalsAgainst;
+    });
+
+    return {
+      nacional: stats[0] || null,
+      estadual: selectedState ? stats.find(s => s.team.state === selectedState) : null,
+      municipal: selectedCity ? stats.find(s => s.team.city === selectedCity) : null,
+      zonaLeste: stats.find(s => s.team.zone === 'Leste' && s.team.city === 'São Paulo' && s.team.state === 'SP'),
+      zonaOeste: stats.find(s => s.team.zone === 'Oeste' && s.team.city === 'São Paulo' && s.team.state === 'SP'),
+      zonaNorte: stats.find(s => s.team.zone === 'Norte' && s.team.city === 'São Paulo' && s.team.state === 'SP'),
+      zonaSul: stats.find(s => s.team.zone === 'Sul' && s.team.city === 'São Paulo' && s.team.state === 'SP'),
+      zonaCentro: stats.find(s => s.team.zone === 'Centro' && s.team.city === 'São Paulo' && s.team.state === 'SP'),
+    };
   };
 
   if (loading) {
@@ -276,6 +422,7 @@ export default function Ranking() {
   }
 
   const ranking = getFilteredRanking();
+  const leaders = getCurrentLeaders();
 
   return (
     <div className="space-y-8 animate-in fade-in duration-500">
@@ -286,6 +433,146 @@ export default function Ranking() {
         </h1>
         <p className="text-zinc-500 mt-2">Acompanhe a classificação dos times no Brasil, no seu Estado e na sua Cidade.</p>
       </header>
+
+      {rankingConfig && (rankingConfig.startDate || rankingConfig.endDate || Object.values(rankingConfig.prizes).some(p => p)) && (
+        <div className="bg-gradient-to-br from-emerald-500 to-emerald-700 rounded-2xl p-6 text-white shadow-md">
+          <div className="flex flex-col gap-6">
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+              <div className="space-y-2">
+                <h2 className="text-2xl font-bold flex items-center gap-2">
+                  <Trophy className="w-6 h-6 text-yellow-300" />
+                  Competição Atual
+                </h2>
+                {(rankingConfig.startDate || rankingConfig.endDate) && (
+                  <div className="flex items-center gap-2 text-emerald-100">
+                    <Calendar className="w-4 h-4" />
+                    <span>
+                      {rankingConfig.startDate ? new Date(rankingConfig.startDate).toLocaleDateString('pt-BR') : '...'} 
+                      {' '}até{' '} 
+                      {rankingConfig.endDate ? new Date(rankingConfig.endDate).toLocaleDateString('pt-BR') : '...'}
+                    </span>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+              {rankingConfig.prizes.nacional && (
+                <div className="bg-white/10 rounded-xl p-4 backdrop-blur-sm border border-white/20 flex flex-col justify-between">
+                  <div>
+                    <div className="text-emerald-100 text-xs font-medium mb-1 flex items-center gap-1">
+                      <Globe className="w-3 h-3" /> Nacional
+                    </div>
+                    <div className="font-semibold text-sm mb-3">{rankingConfig.prizes.nacional}</div>
+                  </div>
+                  <div className="pt-3 border-t border-white/10">
+                    <div className="text-[10px] uppercase tracking-wider text-emerald-200 mb-1">Líder Atual</div>
+                    <div className="font-medium text-sm truncate">{leaders.nacional ? leaders.nacional.team.name : '-'}</div>
+                  </div>
+                </div>
+              )}
+              {rankingConfig.prizes.estadual && (
+                <div className="bg-white/10 rounded-xl p-4 backdrop-blur-sm border border-white/20 flex flex-col justify-between">
+                  <div>
+                    <div className="text-emerald-100 text-xs font-medium mb-1 flex items-center gap-1">
+                      <MapIcon className="w-3 h-3" /> Estadual {selectedState ? `(${selectedState})` : ''}
+                    </div>
+                    <div className="font-semibold text-sm mb-3">{rankingConfig.prizes.estadual}</div>
+                  </div>
+                  <div className="pt-3 border-t border-white/10">
+                    <div className="text-[10px] uppercase tracking-wider text-emerald-200 mb-1">Líder Atual</div>
+                    <div className="font-medium text-sm truncate">{leaders.estadual ? leaders.estadual.team.name : (selectedState ? '-' : 'Selecione um estado')}</div>
+                  </div>
+                </div>
+              )}
+              {rankingConfig.prizes.municipal && (
+                <div className="bg-white/10 rounded-xl p-4 backdrop-blur-sm border border-white/20 flex flex-col justify-between">
+                  <div>
+                    <div className="text-emerald-100 text-xs font-medium mb-1 flex items-center gap-1">
+                      <MapPin className="w-3 h-3" /> Municipal {selectedCity ? `(${selectedCity})` : ''}
+                    </div>
+                    <div className="font-semibold text-sm mb-3">{rankingConfig.prizes.municipal}</div>
+                  </div>
+                  <div className="pt-3 border-t border-white/10">
+                    <div className="text-[10px] uppercase tracking-wider text-emerald-200 mb-1">Líder Atual</div>
+                    <div className="font-medium text-sm truncate">{leaders.municipal ? leaders.municipal.team.name : (selectedCity ? '-' : 'Selecione uma cidade')}</div>
+                  </div>
+                </div>
+              )}
+              {rankingConfig.prizes.zonaLeste && (
+                <div className="bg-white/10 rounded-xl p-4 backdrop-blur-sm border border-white/20 flex flex-col justify-between">
+                  <div>
+                    <div className="text-emerald-100 text-xs font-medium mb-1 flex items-center gap-1">
+                      <Gift className="w-3 h-3" /> Zona Leste (SP)
+                    </div>
+                    <div className="font-semibold text-sm mb-3">{rankingConfig.prizes.zonaLeste}</div>
+                  </div>
+                  <div className="pt-3 border-t border-white/10">
+                    <div className="text-[10px] uppercase tracking-wider text-emerald-200 mb-1">Líder Atual</div>
+                    <div className="font-medium text-sm truncate">{leaders.zonaLeste ? leaders.zonaLeste.team.name : '-'}</div>
+                  </div>
+                </div>
+              )}
+              {rankingConfig.prizes.zonaOeste && (
+                <div className="bg-white/10 rounded-xl p-4 backdrop-blur-sm border border-white/20 flex flex-col justify-between">
+                  <div>
+                    <div className="text-emerald-100 text-xs font-medium mb-1 flex items-center gap-1">
+                      <Gift className="w-3 h-3" /> Zona Oeste (SP)
+                    </div>
+                    <div className="font-semibold text-sm mb-3">{rankingConfig.prizes.zonaOeste}</div>
+                  </div>
+                  <div className="pt-3 border-t border-white/10">
+                    <div className="text-[10px] uppercase tracking-wider text-emerald-200 mb-1">Líder Atual</div>
+                    <div className="font-medium text-sm truncate">{leaders.zonaOeste ? leaders.zonaOeste.team.name : '-'}</div>
+                  </div>
+                </div>
+              )}
+              {rankingConfig.prizes.zonaNorte && (
+                <div className="bg-white/10 rounded-xl p-4 backdrop-blur-sm border border-white/20 flex flex-col justify-between">
+                  <div>
+                    <div className="text-emerald-100 text-xs font-medium mb-1 flex items-center gap-1">
+                      <Gift className="w-3 h-3" /> Zona Norte (SP)
+                    </div>
+                    <div className="font-semibold text-sm mb-3">{rankingConfig.prizes.zonaNorte}</div>
+                  </div>
+                  <div className="pt-3 border-t border-white/10">
+                    <div className="text-[10px] uppercase tracking-wider text-emerald-200 mb-1">Líder Atual</div>
+                    <div className="font-medium text-sm truncate">{leaders.zonaNorte ? leaders.zonaNorte.team.name : '-'}</div>
+                  </div>
+                </div>
+              )}
+              {rankingConfig.prizes.zonaSul && (
+                <div className="bg-white/10 rounded-xl p-4 backdrop-blur-sm border border-white/20 flex flex-col justify-between">
+                  <div>
+                    <div className="text-emerald-100 text-xs font-medium mb-1 flex items-center gap-1">
+                      <Gift className="w-3 h-3" /> Zona Sul (SP)
+                    </div>
+                    <div className="font-semibold text-sm mb-3">{rankingConfig.prizes.zonaSul}</div>
+                  </div>
+                  <div className="pt-3 border-t border-white/10">
+                    <div className="text-[10px] uppercase tracking-wider text-emerald-200 mb-1">Líder Atual</div>
+                    <div className="font-medium text-sm truncate">{leaders.zonaSul ? leaders.zonaSul.team.name : '-'}</div>
+                  </div>
+                </div>
+              )}
+              {rankingConfig.prizes.zonaCentro && (
+                <div className="bg-white/10 rounded-xl p-4 backdrop-blur-sm border border-white/20 flex flex-col justify-between">
+                  <div>
+                    <div className="text-emerald-100 text-xs font-medium mb-1 flex items-center gap-1">
+                      <Gift className="w-3 h-3" /> Centro (SP)
+                    </div>
+                    <div className="font-semibold text-sm mb-3">{rankingConfig.prizes.zonaCentro}</div>
+                  </div>
+                  <div className="pt-3 border-t border-white/10">
+                    <div className="text-[10px] uppercase tracking-wider text-emerald-200 mb-1">Líder Atual</div>
+                    <div className="font-medium text-sm truncate">{leaders.zonaCentro ? leaders.zonaCentro.team.name : '-'}</div>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       <div className="bg-white rounded-2xl border border-zinc-200 shadow-sm overflow-hidden">
         <div className="flex border-b border-zinc-200">
@@ -442,10 +729,10 @@ export default function Ranking() {
                     </td>
                   </tr>
                 ) : (
-                  ranking.map((stat, index) => (
+                  ranking.map((stat) => (
                     <tr key={stat.team.id} className="hover:bg-zinc-50 transition-colors">
                       <td className="p-4 text-center font-bold text-zinc-400">
-                        {index + 1}º
+                        {stat.originalPosition}º
                       </td>
                       <td className="p-4">
                         <div className="flex items-center gap-3">
