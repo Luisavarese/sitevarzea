@@ -170,6 +170,7 @@ service cloud.firestore {
       allow read: if isAuthenticated();
       allow create: if isAuthenticated() && isValidTeam();
       allow update: if isAuthenticated() && (isAdmin() || (isTeamManager(teamId) && areImmutableFieldsUnchanged(['managerId', 'createdAt'])));
+      allow delete: if isAdmin();
     }
 
     match /players/{playerId} {

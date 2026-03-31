@@ -158,8 +158,10 @@ export function AdminPanel() {
   const [confirmDeleteBanner, setConfirmDeleteBanner] = useState<string | null>(null);
   const [confirmDeleteComp, setConfirmDeleteComp] = useState<string | null>(null);
   const [confirmDeleteHistory, setConfirmDeleteHistory] = useState(false);
+  const [confirmDeleteAllTeams, setConfirmDeleteAllTeams] = useState(false);
   const [confirmDeleteRanking, setConfirmDeleteRanking] = useState(false);
   const [isDeletingHistory, setIsDeletingHistory] = useState(false);
+  const [isDeletingAllTeams, setIsDeletingAllTeams] = useState(false);
   const [toastMessage, setToastMessage] = useState<{title: string, type: 'success' | 'error'} | null>(null);
 
   const showToast = (title: string, type: 'success' | 'error') => {
@@ -591,6 +593,34 @@ export function AdminPanel() {
       showToast("Erro ao apagar histórico.", "error");
     } finally {
       setIsDeletingHistory(false);
+    }
+  };
+
+  const handleDeleteAllTeams = async () => {
+    setIsDeletingAllTeams(true);
+    try {
+      const snap = await getDocs(collection(db, 'teams'));
+      for (const docSnap of snap.docs) {
+        await deleteDoc(doc(db, 'teams', docSnap.id));
+      }
+
+      showToast("Todos os times foram apagados com sucesso.", "success");
+      setConfirmDeleteAllTeams(false);
+      
+      setAllTeams([]);
+      setMetrics(prev => ({ 
+        ...prev, 
+        totalTeams: 0, 
+        activeTeams: 0, 
+        activeHomeTeams: 0, 
+        activeAwayTeams: 0, 
+        inactiveTeams: 0 
+      }));
+    } catch (error) {
+      console.error("Error deleting all teams:", error);
+      showToast("Erro ao apagar times.", "error");
+    } finally {
+      setIsDeletingAllTeams(false);
     }
   };
 
@@ -1452,19 +1482,37 @@ export function AdminPanel() {
           <Trash2 className="w-5 h-5" />
           Zona de Perigo
         </h2>
-        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-          <div>
-            <h3 className="font-medium text-red-900">Apagar Histórico de Jogos</h3>
-            <p className="text-sm text-red-700 mt-1">
-              Esta ação irá apagar permanentemente todos os jogos, festivais e resultados cadastrados no sistema. As pontuações de todos os times serão zeradas. Esta ação não pode ser desfeita.
-            </p>
+        
+        <div className="space-y-6">
+          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 pb-6 border-b border-red-200">
+            <div>
+              <h3 className="font-medium text-red-900">Apagar Histórico de Jogos</h3>
+              <p className="text-sm text-red-700 mt-1">
+                Esta ação irá apagar permanentemente todos os jogos, festivais e resultados cadastrados no sistema. As pontuações de todos os times serão zeradas. Esta ação não pode ser desfeita.
+              </p>
+            </div>
+            <button 
+              onClick={() => setConfirmDeleteHistory(true)}
+              className="flex-shrink-0 bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-lg font-medium transition-colors"
+            >
+              Apagar Histórico
+            </button>
           </div>
-          <button 
-            onClick={() => setConfirmDeleteHistory(true)}
-            className="flex-shrink-0 bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-lg font-medium transition-colors"
-          >
-            Apagar Histórico
-          </button>
+
+          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+            <div>
+              <h3 className="font-medium text-red-900">Apagar Todos os Times</h3>
+              <p className="text-sm text-red-700 mt-1">
+                Esta ação irá apagar permanentemente <strong>TODOS</strong> os times cadastrados no sistema. Esta ação não pode ser desfeita.
+              </p>
+            </div>
+            <button 
+              onClick={() => setConfirmDeleteAllTeams(true)}
+              className="flex-shrink-0 bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-lg font-medium transition-colors"
+            >
+              Apagar Times
+            </button>
+          </div>
         </div>
       </section>
 
@@ -1695,6 +1743,40 @@ export function AdminPanel() {
       )}
 
       {/* Toast */}
+      {confirmDeleteAllTeams && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl p-6 max-w-md w-full shadow-xl">
+            <h3 className="text-xl font-bold text-red-600 mb-2">Apagar Todos os Times</h3>
+            <p className="text-zinc-600 mb-6">
+              Tem certeza que deseja apagar <strong>TODOS</strong> os times do sistema? Esta ação é irreversível e removerá permanentemente todos os dados dos times.
+            </p>
+            <div className="flex justify-end gap-3">
+              <button 
+                onClick={() => setConfirmDeleteAllTeams(false)}
+                disabled={isDeletingAllTeams}
+                className="px-4 py-2 text-sm font-medium text-zinc-600 hover:bg-zinc-100 rounded-lg transition-colors disabled:opacity-50"
+              >
+                Cancelar
+              </button>
+              <button 
+                onClick={handleDeleteAllTeams}
+                disabled={isDeletingAllTeams}
+                className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-red-600 hover:bg-red-700 rounded-lg transition-colors disabled:opacity-50"
+              >
+                {isDeletingAllTeams ? (
+                  <>
+                    <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                    Apagando...
+                  </>
+                ) : (
+                  'Sim, apagar tudo'
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {toastMessage && (
         <div className="fixed bottom-4 right-4 z-50 animate-in slide-in-from-bottom-5">
           <div className={cn(
