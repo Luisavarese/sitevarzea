@@ -1,5 +1,5 @@
 import { useState, useEffect, FormEvent, ChangeEvent } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { collection, query, getDocs, addDoc, where, doc, updateDoc, deleteDoc, getDoc } from 'firebase/firestore';
 import { db } from '../firebase';
@@ -47,6 +47,9 @@ interface Match {
   date: string;
   endTime?: string;
   location: string;
+  distance?: string;
+  lat?: number;
+  lng?: number;
   status: 'pending' | 'confirmed' | 'completed' | 'cancelled';
   homeScore?: number;
   awayScore?: number;
@@ -117,6 +120,7 @@ const CountdownTimer = ({ submittedAt }: { submittedAt: string }) => {
 
 export function Calendar() {
   const navigate = useNavigate();
+  const location = useLocation();
   const { user, activeTeamId } = useAuth();
   const [myTeamId, setMyTeamId] = useState<string | null>(null);
   const [myTeam, setMyTeam] = useState<any>(null);
@@ -132,6 +136,14 @@ export function Calendar() {
   
   // Forms
   const [isAddingAvail, setIsAddingAvail] = useState(false);
+
+  useEffect(() => {
+    if (location.state?.openAddAvailability) {
+      setIsAddingAvail(true);
+      // Clear the state so it doesn't reopen on refresh
+      window.history.replaceState({}, document.title);
+    }
+  }, [location.state]);
   const [editingAvailId, setEditingAvailId] = useState<string | null>(null);
   const initialAvailForm = {
     dayOfWeek: 0,
@@ -154,6 +166,15 @@ export function Calendar() {
   const [availForm, setAvailForm] = useState(initialAvailForm);
   const [newBlockDate, setNewBlockDate] = useState('');
 
+  useEffect(() => {
+    if (myTeam && !editingAvailId) {
+      setAvailForm(prev => ({
+        ...prev,
+        type: myTeam.subscription?.plan?.includes('visitante') ? 'away' : 'home'
+      }));
+    }
+  }, [myTeam, editingAvailId]);
+
   // Modals & Toasts
   const [confirmMatch, setConfirmMatch] = useState<{avail: Availability, availableDates: Date[]} | null>(null);
   const [selectedDateStr, setSelectedDateStr] = useState<string>('');
@@ -168,24 +189,33 @@ export function Calendar() {
     const matchDateZoned = toZonedTime(new Date(match.date), timeZone);
     let endTimeZoned = toZonedTime(new Date(match.date), timeZone);
     
-    if (match.endTime) {
+    if (match.endTime && match.endTime.includes(':')) {
       const [hours, minutes] = match.endTime.split(':');
-      endTimeZoned.setHours(parseInt(hours || '0'), parseInt(minutes || '0'), 0, 0);
+      const h = parseInt(hours);
+      const m = parseInt(minutes);
       
-      // If end time is earlier than start time, it means it ends the next day
-      if (endTimeZoned < matchDateZoned) {
-        endTimeZoned = addDays(endTimeZoned, 1);
+      if (!isNaN(h) && !isNaN(m)) {
+        endTimeZoned.setHours(h, m, 0, 0);
+        
+        // If end time is earlier than start time, it means it ends the next day
+        if (endTimeZoned < matchDateZoned) {
+          endTimeZoned = addDays(endTimeZoned, 1);
+        }
+      } else {
+        endTimeZoned.setHours(endTimeZoned.getHours() + 2);
       }
     } else {
       // Default duration: 2 hours
       endTimeZoned.setHours(endTimeZoned.getHours() + 2);
     }
     
-    const endTimeUTC = fromZonedTime(endTimeZoned, timeZone);
-    
-    // Unlock 1 hour after match ends
-    const unlockTime = new Date(endTimeUTC.getTime() + 60 * 60 * 1000);
-    return new Date() >= unlockTime;
+    try {
+      const endTimeUTC = fromZonedTime(endTimeZoned, timeZone);
+      // Unlock immediately after match ends
+      return new Date() >= endTimeUTC;
+    } catch (e) {
+      return false;
+    }
   };
   const [contestModal, setContestModal] = useState<{matchId: string, quadroIndex?: number} | null>(null);
   const [contestReason, setContestReason] = useState('');
@@ -326,6 +356,7 @@ export function Calendar() {
           setAvailabilities(availSnap.docs.map(d => {
             const data = d.data();
             const oppTeam = teamsMap.get(data.teamId);
+            if (!oppTeam || oppTeam.deleted) return null;
             return { 
               id: d.id, 
               ...data, 
@@ -337,7 +368,7 @@ export function Calendar() {
               lastResults: getLast5Results(data.teamId),
               whatsapp: oppTeam?.whatsapp
             } as Availability;
-          }).filter(a => {
+          }).filter(Boolean).filter(a => {
             // Always show own availabilities
             if (a.teamId === teamId) return true;
             // If my team has a game type, only show opponents with the same game type
@@ -345,7 +376,7 @@ export function Calendar() {
               return a.gameType === myGameType;
             }
             return true; // Fallback for legacy data without gameType
-          }));
+          }) as Availability[]);
           const festivalQuery = query(collection(db, 'festivalGames'));
           const festivalSnap = await getDocs(festivalQuery);
           const festivalData = festivalSnap.docs
@@ -536,29 +567,55 @@ export function Calendar() {
         const response = await fetch(`https://brasilapi.com.br/api/cep/v2/${cep}`);
         const data = await response.json();
         
+        let newState = availForm.estado;
+        let newCity = availForm.cidade;
+        let newNeighborhood = availForm.bairro;
+        let newStreet = availForm.endereco;
+        let newLat = availForm.lat;
+        let newLng = availForm.lng;
+        
         if (!data.errors && !data.message) {
-          setAvailForm(prev => ({
-            ...prev,
-            estado: data.state || prev.estado,
-            cidade: data.city || prev.cidade,
-            bairro: data.neighborhood || prev.bairro,
-            endereco: data.street || prev.endereco,
-            lat: data.location?.coordinates?.latitude ? Number(data.location.coordinates.latitude) : prev.lat,
-            lng: data.location?.coordinates?.longitude ? Number(data.location.coordinates.longitude) : prev.lng,
-          }));
+          newState = data.state || newState;
+          newCity = data.city || newCity;
+          newNeighborhood = data.neighborhood || newNeighborhood;
+          newStreet = data.street || newStreet;
+          newLat = data.location?.coordinates?.latitude ? Number(data.location.coordinates.latitude) : newLat;
+          newLng = data.location?.coordinates?.longitude ? Number(data.location.coordinates.longitude) : newLng;
         } else {
           const viaCepResponse = await fetch(`https://viacep.com.br/ws/${cep}/json/`);
           const viaCepData = await viaCepResponse.json();
           if (!viaCepData.erro) {
-            setAvailForm(prev => ({
-              ...prev,
-              estado: viaCepData.uf || prev.estado,
-              cidade: viaCepData.localidade || prev.cidade,
-              bairro: viaCepData.bairro || prev.bairro,
-              endereco: viaCepData.logradouro || prev.endereco,
-            }));
+            newState = viaCepData.uf || newState;
+            newCity = viaCepData.localidade || newCity;
+            newNeighborhood = viaCepData.bairro || newNeighborhood;
+            newStreet = viaCepData.logradouro || newStreet;
           }
         }
+
+        // Se a API do BrasilAPI não retornou as coordenadas, tenta buscar pelo endereço no Nominatim (OpenStreetMap)
+        if (!newLat || !newLng) {
+          try {
+            const addressQuery = encodeURIComponent(`${newStreet}, ${newCity}, ${newState}, Brazil`);
+            const geoResponse = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${addressQuery}`);
+            const geoData = await geoResponse.json();
+            if (geoData && geoData.length > 0) {
+              newLat = Number(geoData[0].lat);
+              newLng = Number(geoData[0].lon);
+            }
+          } catch (e) {
+            console.error("Erro ao buscar coordenadas no Nominatim:", e);
+          }
+        }
+
+        setAvailForm(prev => ({
+          ...prev,
+          estado: newState,
+          cidade: newCity,
+          bairro: newNeighborhood,
+          endereco: newStreet,
+          lat: newLat,
+          lng: newLng,
+        }));
       } catch (error) {
         console.error("Erro ao buscar CEP:", error);
       }
@@ -577,7 +634,30 @@ export function Calendar() {
       return;
     }
 
+    if (myTeam?.subscription?.plan === 'visitante_free' && availForm.type === 'home') {
+      showToast("Times visitantes não podem criar disponibilidade como mandante.", "error");
+      return;
+    }
+
     try {
+      let finalLat = availForm.lat;
+      let finalLng = availForm.lng;
+
+      // Se não tiver coordenadas, mas tiver cidade e estado, tenta buscar antes de salvar
+      if ((!finalLat || !finalLng) && availForm.cidade && availForm.estado) {
+        try {
+          const addressQuery = encodeURIComponent(`${availForm.endereco || ''}, ${availForm.cidade}, ${availForm.estado}, Brazil`);
+          const geoResponse = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${addressQuery}`);
+          const geoData = await geoResponse.json();
+          if (geoData && geoData.length > 0) {
+            finalLat = Number(geoData[0].lat);
+            finalLng = Number(geoData[0].lon);
+          }
+        } catch (e) {
+          console.error("Erro ao buscar coordenadas no Nominatim antes de salvar:", e);
+        }
+      }
+
       if (editingAvailId) {
         const availRef = doc(db, 'availabilities', editingAvailId);
         await updateDoc(availRef, {
@@ -594,18 +674,21 @@ export function Calendar() {
           endereco: availForm.endereco,
           numero: availForm.numero,
           referencia: availForm.referencia,
-          lat: availForm.lat ?? null,
-          lng: availForm.lng ?? null,
+          lat: finalLat ?? null,
+          lng: finalLng ?? null,
         });
         
         setAvailabilities(availabilities.map(a => 
           a.id === editingAvailId 
-            ? { ...a, ...availForm, dayOfWeek: Number(availForm.dayOfWeek) } 
+            ? { ...a, ...availForm, dayOfWeek: Number(availForm.dayOfWeek), lat: finalLat, lng: finalLng } 
             : a
         ));
         setEditingAvailId(null);
         setIsAddingAvail(false);
-        setAvailForm(initialAvailForm);
+        setAvailForm({
+          ...initialAvailForm,
+          type: myTeam?.subscription?.plan?.includes('visitante') ? 'away' : 'home'
+        });
         showToast("Disponibilidade atualizada com sucesso!", "success");
       } else {
         const newAvail = {
@@ -623,15 +706,18 @@ export function Calendar() {
           endereco: availForm.endereco,
           numero: availForm.numero,
           referencia: availForm.referencia,
-          lat: availForm.lat ?? null,
-          lng: availForm.lng ?? null,
+          lat: finalLat ?? null,
+          lng: finalLng ?? null,
           createdAt: new Date().toISOString()
         };
         
         const docRef = await addDoc(collection(db, 'availabilities'), newAvail);
         setAvailabilities([...availabilities, { id: docRef.id, ...newAvail, teamName: 'Meu Time' }]);
         setIsAddingAvail(false);
-        setAvailForm(initialAvailForm);
+        setAvailForm({
+          ...initialAvailForm,
+          type: myTeam?.subscription?.plan?.includes('visitante') ? 'away' : 'home'
+        });
         showToast("Disponibilidade adicionada com sucesso!", "success");
       }
     } catch (error) {
@@ -653,7 +739,7 @@ export function Calendar() {
       startTime: avail.startTime,
       endTime: avail.endTime,
       location: avail.location,
-      type: currentSub.plan?.includes('visitante') ? 'away' : 'home',
+      type: avail.type || 'both',
       estado: avail.estado || '',
       cidade: avail.cidade || '',
       bairro: avail.bairro || '',
@@ -745,6 +831,11 @@ export function Calendar() {
       return;
     }
 
+    if (avail.type === 'away' && myTeam?.subscription?.plan === 'visitante_free') {
+      showToast("Times visitantes não podem convidar outros times visitantes para jogar em casa.", "error");
+      return;
+    }
+
     setConfirmMatch({ avail, availableDates: avail.availableDates });
     if (selectedCalendarDate && avail.availableDates.some(d => isSameDay(d, selectedCalendarDate))) {
       setSelectedDateStr(format(selectedCalendarDate, 'yyyy-MM-dd'));
@@ -801,12 +892,17 @@ export function Calendar() {
     }
 
     try {
+      const distance = calculateDistance(avail.lat, avail.lng, avail.matchedMyAvail.lat, avail.matchedMyAvail.lng) || undefined;
+
       const newMatch = {
         homeTeamId: avail.type === 'away' ? myTeamId : avail.teamId,
         awayTeamId: avail.type === 'away' ? avail.teamId : myTeamId,
         date: nextDate.toISOString(),
         endTime: avail.endTime || '00:00',
         location: formatLocation(avail),
+        distance: distance,
+        lat: avail.lat,
+        lng: avail.lng,
         status: 'pending',
         scheduledById: user.uid,
         createdAt: new Date().toISOString()
@@ -844,6 +940,60 @@ export function Calendar() {
         const phone = avail.whatsapp.replace(/\D/g, '');
         if (phone) {
           const appUrl = window.location.origin;
+          
+          // Format phone number correctly for Twilio (E.164 format)
+          let formattedPhone = phone;
+          if (formattedPhone.length === 10 || formattedPhone.length === 11) {
+            formattedPhone = `+55${formattedPhone}`;
+          } else if (formattedPhone.startsWith('55') && formattedPhone.length >= 12) {
+            formattedPhone = `+${formattedPhone}`;
+          } else if (!formattedPhone.startsWith('+')) {
+            formattedPhone = `+55${formattedPhone}`;
+          }
+          
+          // Send SMS via Twilio
+          try {
+            const matchLocation = formatLocation(avail);
+            const smsRes = await fetch('/api/send-sms', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                to: formattedPhone,
+                body: `Convite: ${myTeam?.name || 'adversário'} dia ${matchDateStr} em ${matchLocation}. Aceite em: varzeabrasil.com`
+              })
+            });
+            
+            const smsData = await smsRes.json();
+            if (!smsRes.ok) {
+              console.error("SMS Error:", smsData);
+              showToast(`Aviso: Convite enviado, mas falha no SMS (${smsData.error})`, "error");
+            }
+          } catch (smsError) {
+            console.error("Failed to send SMS:", smsError);
+            showToast("Aviso: Convite enviado, mas houve um erro ao tentar enviar o SMS.", "error");
+          }
+
+          // Send WhatsApp via Twilio
+          try {
+            const matchLocation = formatLocation(avail);
+            const waRes = await fetch('/api/send-whatsapp', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                to: formattedPhone,
+                body: `Olá! O time *${myTeam?.name || 'adversário'}* te convidou para um jogo no dia *${matchDateStr}* em *${matchLocation}*.\n\nAcesse o site Varzea Brasil para aceitar ou recusar:\nhttps://www.varzeabrasil.com`
+              })
+            });
+            
+            const waData = await waRes.json();
+            if (!waRes.ok) {
+              console.error("WhatsApp Error:", waData);
+              showToast(`Aviso: Falha ao enviar WhatsApp (${waData.error})`, "error");
+            }
+          } catch (waError) {
+            console.error("Failed to send WhatsApp:", waError);
+          }
+
           const waMessage = `Olá! ${message} Acesse o site para aceitar ou recusar: ${appUrl}/calendar`;
           
           const waUrl = `https://api.whatsapp.com/send?phone=55${phone}&text=${encodeURIComponent(waMessage)}`;
@@ -1260,7 +1410,7 @@ export function Calendar() {
 
                   setAvailForm({
                     ...initialAvailForm,
-                    type: 'away'
+                    type: currentSub?.plan?.includes('visitante') ? 'away' : 'home'
                   });
                   setEditingAvailId(null);
                   setIsAddingAvail(true);
@@ -1286,7 +1436,11 @@ export function Calendar() {
                   <select 
                     value={availForm.type} 
                     onChange={e => setAvailForm({...availForm, type: e.target.value as any})} 
-                    className="w-full p-2 text-sm border border-zinc-300 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none"
+                    className={cn(
+                      "w-full p-2 text-sm border border-zinc-300 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none",
+                      !myTeam?.subscription?.plan?.startsWith('premium') && "bg-zinc-100"
+                    )}
+                    disabled={!myTeam?.subscription?.plan?.startsWith('premium')}
                   >
                     <option value="away">Visitante (Vou jogar fora)</option>
                     <option value="home">Mandante (Tenho campo)</option>
@@ -1339,7 +1493,10 @@ export function Calendar() {
                 <button type="button" onClick={() => {
                   setIsAddingAvail(false);
                   setEditingAvailId(null);
-                  setAvailForm(initialAvailForm);
+                  setAvailForm({
+                    ...initialAvailForm,
+                    type: myTeam?.subscription?.plan?.includes('visitante') ? 'away' : 'home'
+                  });
                 }} className="px-3 py-2 text-sm text-zinc-600 hover:bg-zinc-100 rounded-lg font-medium">Cancelar</button>
                 <button type="submit" className="bg-emerald-500 hover:bg-emerald-600 text-white px-4 py-2 text-sm rounded-lg font-medium">Salvar</button>
               </div>
@@ -1572,9 +1729,16 @@ export function Calendar() {
                         <span className="flex items-center gap-1"><MapPin className="w-3 h-3" /> {formatLocation(avail)} ({avail.type === 'home' ? 'Mandante' : avail.type === 'away' ? 'Visitante' : 'Ambos'})</span>
                         <span className="flex items-center gap-1 bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded-full font-medium"><CalendarIcon className="w-3 h-3" /> {avail.availableDates.length} datas disponíveis</span>
                         {distance && (
-                          <span className="px-2 py-0.5 bg-zinc-100 rounded-full text-zinc-600 font-medium">
+                          <a 
+                            href={`https://www.google.com/maps/search/?api=1&query=${avail.lat},${avail.lng}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="flex items-center gap-1 px-2 py-0.5 bg-blue-50 text-blue-700 hover:bg-blue-100 rounded-full font-medium transition-colors"
+                            title="Ver localização no Google Maps"
+                          >
+                            <MapPin className="w-3 h-3" />
                             ~{distance} km de distância
-                          </span>
+                          </a>
                         )}
                       </div>
                       {(avail.uniformColor || avail.teamLevel) && (
@@ -1629,6 +1793,27 @@ export function Calendar() {
                 const isPending = match.status === 'pending';
                 const iRequested = match.scheduledById === user?.uid;
 
+                // Calculate dynamic distance if missing
+                let displayDistance = match.distance;
+                let displayLat = match.lat;
+                let displayLng = match.lng;
+
+                if (!displayDistance || !displayLat || !displayLng) {
+                  // Find any availability for home team that has coordinates
+                  const homeAvail = availabilities.find(a => a.teamId === match.homeTeamId && a.lat && a.lng);
+                  // Find any availability for away team that has coordinates
+                  const awayAvail = availabilities.find(a => a.teamId === match.awayTeamId && a.lat && a.lng);
+                  
+                  if (homeAvail && homeAvail.lat && homeAvail.lng) {
+                    displayLat = homeAvail.lat;
+                    displayLng = homeAvail.lng;
+                    
+                    if (awayAvail && awayAvail.lat && awayAvail.lng) {
+                      displayDistance = calculateDistance(homeAvail.lat, homeAvail.lng, awayAvail.lat, awayAvail.lng) || undefined;
+                    }
+                  }
+                }
+
                 return (
                   <div key={match.id} className="p-4 flex flex-col md:flex-row md:items-center justify-between gap-4 hover:bg-zinc-50 transition-colors">
                     <div className="flex items-center gap-4">
@@ -1672,10 +1857,25 @@ export function Calendar() {
                           {isPending && <span className="text-[10px] bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full uppercase font-bold tracking-wider">Pendente</span>}
                           {match.status === 'confirmed' && !match.isFestival && <span className="text-[10px] bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full uppercase font-bold tracking-wider">Confirmado</span>}
                         </div>
-                        <div className="text-sm text-zinc-500 flex items-center gap-1 mt-1">
+                        <div className="text-sm text-zinc-500 flex items-center gap-1 mt-1 flex-wrap">
                           <Clock className="w-3 h-3" /> {match.date && !isNaN(new Date(match.date).getTime()) ? format(new Date(match.date), 'HH:mm') : '--:--'}
                           <span className="mx-1">•</span>
                           <MapPin className="w-3 h-3" /> {match.location}
+                          {displayDistance && displayLat && displayLng && (
+                            <>
+                              <span className="mx-1 hidden sm:inline">•</span>
+                              <a 
+                                href={`https://www.google.com/maps/search/?api=1&query=${displayLat},${displayLng}`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="flex items-center gap-1 px-2 py-0.5 bg-blue-50 text-blue-700 hover:bg-blue-100 rounded-full font-medium transition-colors text-xs ml-0 sm:ml-1 mt-1 sm:mt-0"
+                                title="Ver localização no Google Maps"
+                              >
+                                <MapPin className="w-3 h-3" />
+                                ~{displayDistance} km
+                              </a>
+                            </>
+                          )}
                         </div>
                         {match.opponentWhatsapp && (
                           <a 
@@ -1719,7 +1919,7 @@ export function Calendar() {
                             ? 'bg-zinc-100 hover:bg-zinc-200 text-zinc-700' 
                             : 'bg-zinc-50 text-zinc-400 cursor-not-allowed border border-zinc-200'
                         }`}
-                        title={!isResultUnlocked(match) ? 'O resultado só pode ser inserido 1 hora após o término da partida.' : ''}
+                        title={!isResultUnlocked(match) ? 'O resultado só pode ser inserido após o término da partida.' : ''}
                       >
                         Informar Resultado
                       </button>

@@ -170,6 +170,102 @@ async function startServer() {
     res.json({ status: "ok" });
   });
 
+  app.post("/api/send-sms", async (req, res) => {
+    try {
+      const { to, body } = req.body;
+      const accountSid = process.env.TWILIO_ACCOUNT_SID;
+      const authToken = process.env.TWILIO_AUTH_TOKEN;
+      const fromNumber = process.env.TWILIO_PHONE_NUMBER;
+
+      if (!accountSid || !authToken || !fromNumber) {
+        console.error("Twilio credentials missing in environment variables.");
+        return res.status(500).json({ error: "Credenciais do Twilio não configuradas no servidor." });
+      }
+
+      const twilioUrl = `https://api.twilio.com/2010-04-01/Accounts/${accountSid}/Messages.json`;
+      
+      const params = new URLSearchParams();
+      params.append('To', to);
+      params.append('From', fromNumber);
+      params.append('Body', body);
+
+      console.log(`Sending SMS to ${to} via Twilio...`);
+
+      const response = await fetch(twilioUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+          'Authorization': 'Basic ' + Buffer.from(`${accountSid}:${authToken}`).toString('base64')
+        },
+        body: params.toString()
+      });
+
+      const data = await response.json();
+      
+      if (!response.ok) {
+        console.error("Twilio API Error Details:", data);
+        return res.status(response.status).json({ 
+          error: data.message || 'Falha ao enviar SMS pelo Twilio',
+          details: data 
+        });
+      }
+
+      console.log(`SMS sent successfully. SID: ${data.sid}`);
+      res.json({ success: true, messageId: data.sid });
+    } catch (error) {
+      console.error("Error sending SMS:", error);
+      res.status(500).json({ error: "Erro interno ao tentar enviar SMS." });
+    }
+  });
+
+  app.post("/api/send-whatsapp", async (req, res) => {
+    try {
+      const { to, body } = req.body;
+      const accountSid = process.env.TWILIO_ACCOUNT_SID;
+      const authToken = process.env.TWILIO_AUTH_TOKEN;
+      const fromNumber = process.env.TWILIO_WHATSAPP_NUMBER || process.env.TWILIO_PHONE_NUMBER;
+
+      if (!accountSid || !authToken || !fromNumber) {
+        console.error("Twilio credentials missing in environment variables.");
+        return res.status(500).json({ error: "Credenciais do Twilio não configuradas no servidor." });
+      }
+
+      const twilioUrl = `https://api.twilio.com/2010-04-01/Accounts/${accountSid}/Messages.json`;
+      
+      const params = new URLSearchParams();
+      params.append('To', to.startsWith('whatsapp:') ? to : `whatsapp:${to}`);
+      params.append('From', fromNumber.startsWith('whatsapp:') ? fromNumber : `whatsapp:${fromNumber}`);
+      params.append('Body', body);
+
+      console.log(`Sending WhatsApp to ${to} via Twilio...`);
+
+      const response = await fetch(twilioUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+          'Authorization': 'Basic ' + Buffer.from(`${accountSid}:${authToken}`).toString('base64')
+        },
+        body: params.toString()
+      });
+
+      const data = await response.json();
+      
+      if (!response.ok) {
+        console.error("Twilio API Error Details:", data);
+        return res.status(response.status).json({ 
+          error: data.message || 'Falha ao enviar WhatsApp pelo Twilio',
+          details: data 
+        });
+      }
+
+      console.log(`WhatsApp sent successfully. SID: ${data.sid}`);
+      res.json({ success: true, messageId: data.sid });
+    } catch (error) {
+      console.error("Error sending WhatsApp:", error);
+      res.status(500).json({ error: "Erro interno ao tentar enviar WhatsApp." });
+    }
+  });
+
   app.post("/api/create-preference", async (req, res) => {
     try {
       const accessToken = process.env.MP_ACCESS_TOKEN;

@@ -12,6 +12,11 @@
     "lint": "tsc --noEmit"
   },
   "dependencies": {
+    "@fullcalendar/core": "^6.1.20",
+    "@fullcalendar/daygrid": "^6.1.20",
+    "@fullcalendar/interaction": "^6.1.20",
+    "@fullcalendar/react": "^6.1.20",
+    "@fullcalendar/timegrid": "^6.1.20",
     "@google/genai": "^1.46.0",
     "@mercadopago/sdk-react": "^1.0.7",
     "@tailwindcss/vite": "^4.1.14",
@@ -29,6 +34,7 @@
     "motion": "^12.23.24",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
+    "react-ga4": "^3.0.1",
     "react-router-dom": "^7.13.1",
     "recharts": "^3.8.1",
     "tailwind-merge": "^3.5.0",

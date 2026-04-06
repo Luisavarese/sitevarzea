@@ -1,9 +1,9 @@
 import { useState, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
-import { doc, onSnapshot, updateDoc, collection, query, where, getDocs, deleteField } from 'firebase/firestore';
+import { doc, onSnapshot, updateDoc, collection, query, where, getDocs, deleteField, getDoc } from 'firebase/firestore';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { db } from '../firebase';
-import { Check, CreditCard, AlertCircle, Trophy, Star, Zap, Shield, TrendingUp, ArrowLeft, Copy } from 'lucide-react';
+import { Check, CreditCard, AlertCircle, Trophy, Star, Zap, Shield, TrendingUp, ArrowLeft, Copy, MapPin } from 'lucide-react';
 import { format, addMonths } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import { cn } from '../lib/utils';
@@ -14,6 +14,8 @@ const mpPublicKey = import.meta.env.VITE_MP_PUBLIC_KEY;
 if (mpPublicKey) {
   initMercadoPago(mpPublicKey, { locale: 'pt-BR' });
 }
+
+const isPromoActive = new Date() <= new Date('2026-06-30T23:59:59-03:00');
 
 const plansData = {
   premium: {
@@ -34,49 +36,51 @@ const plansData = {
         id: 'premium_mensal',
         name: 'Mensal',
         period: 'Mensal',
-        price: 1.05,
-        pricePerMonth: 1.05,
-        discount: 0,
-        savings: 0,
-        popular: false
+        price: isPromoActive ? 12.50 : 25.00,
+        pricePerMonth: isPromoActive ? 12.50 : 25.00,
+        discount: isPromoActive ? 50 : 0,
+        savings: isPromoActive ? 12.50 : 0,
+        popular: false,
+        badge: isPromoActive ? '50% OFF até 30/06' : undefined
       },
       {
         id: 'premium_trimestral',
         name: 'Trimestral',
         period: 'Trimestral',
-        price: 1.06,
-        pricePerMonth: 0.35,
-        discount: 11,
-        savings: 10.10,
-        popular: false
+        price: isPromoActive ? 35.00 : 70.00,
+        pricePerMonth: isPromoActive ? 11.66 : 23.33,
+        discount: isPromoActive ? 53.33 : 6.66,
+        savings: isPromoActive ? 40.00 : 5.00,
+        popular: false,
+        badge: isPromoActive ? '50% OFF até 30/06' : undefined
       },
       {
         id: 'premium_semestral',
         name: 'Semestral',
         period: 'Semestral',
-        price: 1.07,
-        pricePerMonth: 0.17,
-        discount: 22,
-        savings: 40.10,
+        price: 135.00,
+        pricePerMonth: 22.50,
+        discount: 10.00,
+        savings: 15.00,
         popular: false
       },
       {
         id: 'premium_anual',
         name: 'Anual',
         period: 'Anual',
-        price: 1.08,
-        pricePerMonth: 0.09,
-        discount: 33,
-        savings: 120.10,
+        price: 250.00,
+        pricePerMonth: 20.83,
+        discount: 16.68,
+        savings: 50.00,
         popular: true,
-        badge: 'Mais escolhido'
+        badge: 'MAIS VENDIDO'
       }
     ]
   }
 };
 
 export function Subscription() {
-  const { user, activeTeamId } = useAuth();
+  const { user, profile, activeTeamId } = useAuth();
   const [team, setTeam] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [processing, setProcessing] = useState(false);
@@ -142,7 +146,37 @@ export function Subscription() {
   }, [user, activeTeamId]);
 
   const handleSubscribe = async () => {
-    if (!team) return;
+    if (!team || !user) return;
+    
+    // If upgrading from visitante_free and hasn't used trial yet
+    const profileDoc = await getDoc(doc(db, 'users', user.uid));
+    const hasUsedTrial = profileDoc.exists() ? profileDoc.data().hasUsedTrial : false;
+
+    if (team.subscription?.plan === 'visitante_free' && !hasUsedTrial) {
+      setProcessing(true);
+      try {
+        const now = new Date();
+        const expiresAt = addMonths(now, 2);
+        await updateDoc(doc(db, 'teams', team.id), {
+          subscription: {
+            status: 'active',
+            plan: 'mandante_trial',
+            startedAt: now.toISOString(),
+            expiresAt: expiresAt.toISOString()
+          }
+        });
+        await updateDoc(doc(db, 'users', user.uid), {
+          hasUsedTrial: true
+        });
+        setPaymentStatusMsg({ type: 'success', text: 'Você ativou seus 2 meses de isenção como Mandante!' });
+      } catch (error) {
+        console.error("Error upgrading to trial:", error);
+        setPaymentStatusMsg({ type: 'error', text: 'Erro ao ativar isenção.' });
+      } finally {
+        setProcessing(false);
+      }
+      return;
+    }
     
     const cycle = plansData.premium.cycles.find(c => c.id === selectedCycle);
     if (!cycle) return;
@@ -407,20 +441,55 @@ export function Subscription() {
       </header>
 
       {isActive && (
-        <div className="bg-[#009c3b]/10 border border-[#009c3b]/20 rounded-2xl p-6 flex flex-col sm:flex-row items-center justify-between gap-4 mb-8">
+        <div className={cn(
+          "border rounded-2xl p-6 flex flex-col sm:flex-row items-center justify-between gap-4 mb-8",
+          currentSub.plan === 'visitante_free' ? "bg-blue-50 border-blue-200" :
+          currentSub.plan === 'mandante_trial' ? "bg-amber-50 border-amber-200" :
+          "bg-[#009c3b]/10 border-[#009c3b]/20"
+        )}>
           <div className="flex items-center gap-4">
-            <div className="w-12 h-12 bg-[#009c3b]/20 rounded-full flex items-center justify-center text-[#009c3b]">
-              <Check className="w-6 h-6" />
+            <div className={cn(
+              "w-12 h-12 rounded-full flex items-center justify-center",
+              currentSub.plan === 'visitante_free' ? "bg-blue-100 text-blue-600" :
+              currentSub.plan === 'mandante_trial' ? "bg-amber-100 text-amber-600" :
+              "bg-[#009c3b]/20 text-[#009c3b]"
+            )}>
+              {currentSub.plan === 'visitante_free' ? <MapPin className="w-6 h-6" /> :
+               currentSub.plan === 'mandante_trial' ? <Shield className="w-6 h-6" /> :
+               <Check className="w-6 h-6" />}
             </div>
             <div>
-              <h3 className="text-lg font-bold text-zinc-900">Assinatura Ativa</h3>
-              <p className="text-sm text-zinc-600">
-                Plano <span className="font-semibold">{formatPlanName(currentSub.plan)}</span>. Válido até {currentSub.expiresAt && !isNaN(new Date(currentSub.expiresAt).getTime()) ? format(new Date(currentSub.expiresAt), "dd 'de' MMMM 'de' yyyy", { locale: ptBR }) : 'Data Inválida'}.
+              <h3 className={cn(
+                "text-lg font-bold",
+                currentSub.plan === 'visitante_free' ? "text-blue-900" :
+                currentSub.plan === 'mandante_trial' ? "text-amber-900" :
+                "text-zinc-900"
+              )}>
+                {currentSub.plan === 'visitante_free' ? 'Time Visitante' :
+                 currentSub.plan === 'mandante_trial' ? 'Isenção de Mandante' :
+                 'Assinatura Ativa'}
+              </h3>
+              <p className={cn(
+                "text-sm",
+                currentSub.plan === 'visitante_free' ? "text-blue-700" :
+                currentSub.plan === 'mandante_trial' ? "text-amber-700" :
+                "text-zinc-600"
+              )}>
+                {currentSub.plan === 'visitante_free' ? 'Times visitantes não pagam mensalidade.' :
+                 currentSub.plan === 'mandante_trial' ? `Válido até ${currentSub.expiresAt && !isNaN(new Date(currentSub.expiresAt).getTime()) ? format(new Date(currentSub.expiresAt), "dd 'de' MMMM 'de' yyyy", { locale: ptBR }) : 'Data Inválida'}. Assine um plano para continuar após esse período.` :
+                 `Plano ${formatPlanName(currentSub.plan)}. Válido até ${currentSub.expiresAt && !isNaN(new Date(currentSub.expiresAt).getTime()) ? format(new Date(currentSub.expiresAt), "dd 'de' MMMM 'de' yyyy", { locale: ptBR }) : 'Data Inválida'}.`}
               </p>
             </div>
           </div>
-          <div className="text-sm font-bold text-[#009c3b] bg-white px-4 py-2 rounded-lg shadow-sm border border-[#009c3b]/10">
-            Recursos Premium Liberados
+          <div className={cn(
+            "text-sm font-bold bg-white px-4 py-2 rounded-lg shadow-sm border",
+            currentSub.plan === 'visitante_free' ? "text-blue-600 border-blue-100" :
+            currentSub.plan === 'mandante_trial' ? "text-amber-600 border-amber-100" :
+            "text-[#009c3b] border-[#009c3b]/10"
+          )}>
+            {currentSub.plan === 'visitante_free' ? 'Acesso Gratuito' :
+             currentSub.plan === 'mandante_trial' ? 'Período de Teste' :
+             'Recursos Premium Liberados'}
           </div>
         </div>
       )}
@@ -469,8 +538,11 @@ export function Subscription() {
                 )}
                 onClick={() => setSelectedCycle(cycle.id)}
               >
-                {cycle.popular && (
-                  <div className="absolute -top-3 left-4 bg-[#009c3b] text-white text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wider">
+                {cycle.badge && (
+                  <div className={cn(
+                    "absolute -top-3 left-4 text-white text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wider",
+                    cycle.popular ? "bg-[#009c3b]" : "bg-amber-500"
+                  )}>
                     {cycle.badge}
                   </div>
                 )}
@@ -543,7 +615,9 @@ export function Subscription() {
             ) : (
               <>
                 <CreditCard className="w-5 h-5" />
-                {selectedCycle === 'premium_anual' ? 'Começar agora' : 'Assinar plano'}
+                {currentSub?.plan === 'visitante_free' && !(profile as any)?.hasUsedTrial 
+                  ? 'Mudar para Mandante (2 Meses Grátis)' 
+                  : selectedCycle === 'premium_anual' ? 'Começar agora' : 'Assinar plano'}
               </>
             )}
           </button>

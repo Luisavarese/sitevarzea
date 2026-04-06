@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Link, Outlet, useLocation } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
-import { Calendar, Home, LogOut, Shield, Trophy, Users, BarChart3, CreditCard } from 'lucide-react';
+import { Calendar, Home, LogOut, Shield, Trophy, Users, BarChart3, CreditCard, MapPin } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { doc, getDoc } from 'firebase/firestore';
 import { db } from '../firebase';
@@ -40,7 +40,6 @@ export function Layout() {
     { name: 'Meu Time', href: '/team', icon: Users },
     { name: 'Calendário', href: '/calendar', icon: Calendar },
     { name: 'Ranking', href: '/ranking', icon: BarChart3 },
-    { name: 'Competições', href: '/competitions', icon: Trophy },
     { name: 'Assinatura', href: '/subscription', icon: CreditCard },
   ];
 

@@ -14,6 +14,7 @@ interface Banner {
   type: 'promo';
   active: boolean;
   order: number;
+  mainText?: string;
 }
 
 interface Match {
@@ -35,7 +36,8 @@ const DEFAULT_BANNERS: Banner[] = [
     link: '#',
     type: 'promo',
     active: true,
-    order: 1
+    order: 1,
+    mainText: 'Campeonato Regional 2026'
   },
   {
     id: 'default-2',
@@ -43,7 +45,8 @@ const DEFAULT_BANNERS: Banner[] = [
     link: '#',
     type: 'promo',
     active: true,
-    order: 2
+    order: 2,
+    mainText: 'Novos Uniformes com Desconto'
   },
   {
     id: 'default-3',
@@ -51,7 +54,8 @@ const DEFAULT_BANNERS: Banner[] = [
     link: '#',
     type: 'promo',
     active: true,
-    order: 3
+    order: 3,
+    mainText: 'Torneio de Férias'
   }
 ];
 
@@ -104,7 +108,19 @@ export function Home() {
             
             const pendingInvites = allMatches.filter(m => m.status === 'pending' && m.scheduledById !== user.uid);
             setPendingInvitesCount(pendingInvites.length);
+          } else {
+            setMyTeam(null);
+            setHasAvailability(true);
+            setPendingResultsCount(0);
+            setContestedResultsCount(0);
+            setPendingInvitesCount(0);
           }
+        } else {
+          setMyTeam(null);
+          setHasAvailability(true);
+          setPendingResultsCount(0);
+          setContestedResultsCount(0);
+          setPendingInvitesCount(0);
         }
 
         // Fetch active banners
@@ -242,6 +258,9 @@ export function Home() {
   const currentSub = myTeam?.subscription;
   const isSubActive = currentSub?.status === 'active' && currentSub.expiresAt && !isNaN(new Date(currentSub.expiresAt).getTime()) && new Date(currentSub.expiresAt) > new Date();
 
+  const isTrial = currentSub?.plan === 'mandante_trial';
+  const trialDaysRemaining = isTrial && currentSub.expiresAt ? Math.ceil((new Date(currentSub.expiresAt).getTime() - new Date().getTime()) / (1000 * 60 * 60 * 24)) : 0;
+
   // Generate alerts
   const alerts = [];
   if (!myTeam) {
@@ -257,7 +276,14 @@ export function Home() {
         message: 'Sua assinatura está inativa. Assine um plano para buscar jogos e participar de campeonatos.',
         link: '/subscription'
       });
+    } else if (isTrial) {
+      alerts.push({
+        type: 'info',
+        message: `Seu time está no período de isenção (Mandante). Restam ${trialDaysRemaining} dias para o fim da isenção.`,
+        link: '/subscription'
+      });
     }
+    
     if (pendingResultsCount > 0) {
       alerts.push({
         type: 'warning',
@@ -310,14 +336,19 @@ export function Home() {
             to="/subscription" 
             className={`flex items-center gap-2 px-4 py-2 rounded-full text-sm font-medium transition-colors ${
               isSubActive 
-                ? 'bg-[#009c3b]/10 text-[#009c3b] hover:bg-[#009c3b]/20' 
+                ? isTrial ? 'bg-blue-50 text-blue-600 hover:bg-blue-100' : 'bg-[#009c3b]/10 text-[#009c3b] hover:bg-[#009c3b]/20' 
                 : 'bg-red-50 text-red-600 hover:bg-red-100'
             }`}
           >
             {isSubActive ? (
               <>
-                <CheckCircle2 className="w-4 h-4" />
-                <span>Assinatura Ativa ({currentSub.plan}) - Vence em {currentSub.expiresAt && !isNaN(new Date(currentSub.expiresAt).getTime()) ? format(new Date(currentSub.expiresAt), 'dd/MM/yyyy') : 'Data Inválida'}</span>
+                {isTrial ? <Info className="w-4 h-4" /> : <CheckCircle2 className="w-4 h-4" />}
+                <span>
+                  {isTrial 
+                    ? `Isenção Ativa - Restam ${trialDaysRemaining} dias` 
+                    : `Assinatura Ativa (${currentSub.plan}) - Vence em ${currentSub.expiresAt && !isNaN(new Date(currentSub.expiresAt).getTime()) ? format(new Date(currentSub.expiresAt), 'dd/MM/yyyy') : 'Data Inválida'}`
+                  }
+                </span>
               </>
             ) : (
               <>
@@ -356,7 +387,7 @@ export function Home() {
 
       {/* Promo Banners Carousel */}
       {promos.length > 0 && (
-        <section className="relative w-full h-48 md:h-72 rounded-2xl overflow-hidden shadow-lg group">
+        <section className="relative w-full aspect-video rounded-2xl overflow-hidden shadow-lg group">
           {promos.map((promo, index) => (
             <a 
               key={promo.id} 
@@ -366,16 +397,6 @@ export function Home() {
               className={`absolute inset-0 transition-opacity duration-1000 ${index === currentBannerIndex ? 'opacity-100 z-10' : 'opacity-0 z-0 pointer-events-none'}`}
             >
               <img src={promo.imageUrl} alt="Promo" className="w-full h-full object-cover" />
-              <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent flex flex-col justify-end p-6 md:p-8">
-                <div className="transform translate-y-4 group-hover:translate-y-0 transition-transform duration-300">
-                  <h3 className="text-white text-xl md:text-2xl font-bold mb-2">
-                    {index === 0 ? 'Campeonato Regional 2026' : index === 1 ? 'Novos Uniformes com Desconto' : 'Torneio de Férias'}
-                  </h3>
-                  <span className="text-emerald-400 font-medium flex items-center gap-2 text-sm md:text-base opacity-0 group-hover:opacity-100 transition-opacity duration-300 delay-100">
-                    Saiba mais <ExternalLink className="w-4 h-4" />
-                  </span>
-                </div>
-              </div>
             </a>
           ))}
           

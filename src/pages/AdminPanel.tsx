@@ -8,11 +8,13 @@ import { format, addMonths, isSameMonth, startOfWeek } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import { ComposedChart, Line, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 
+const isPromoActive = new Date() <= new Date('2026-06-30T23:59:59-03:00');
+
 const planPrices: Record<string, { price: number, months: number }> = {
-  'premium_mensal': { price: 1.05, months: 1 },
-  'premium_trimestral': { price: 1.06, months: 3 },
-  'premium_semestral': { price: 1.07, months: 6 },
-  'premium_anual': { price: 1.08, months: 12 },
+  'premium_mensal': { price: isPromoActive ? 20.00 : 40.00, months: 1 },
+  'premium_trimestral': { price: isPromoActive ? 57.45 : 114.90, months: 3 },
+  'premium_semestral': { price: 215.90, months: 6 },
+  'premium_anual': { price: 407.90, months: 12 },
   'visitante_mensal': { price: 15.00, months: 1 },
   'visitante_trimestral': { price: 39.90, months: 3 },
   'visitante_semestral': { price: 69.90, months: 6 },
@@ -30,6 +32,7 @@ interface Banner {
   type: 'promo';
   active: boolean;
   order: number;
+  mainText?: string;
 }
 
 interface Competition {
@@ -52,6 +55,8 @@ interface Team {
   city: string;
   state: string;
   gameType: string;
+  logoUrl?: string;
+  hasAvailability?: boolean;
   subscription?: {
     status: string;
     expiresAt: string;
@@ -86,6 +91,7 @@ export function AdminPanel() {
     activeHomeTeams: 0,
     activeAwayTeams: 0,
     inactiveTeams: 0,
+    teamsWithoutAvailability: 0,
     totalMatches: 0,
     matchesToday: 0
   });
@@ -99,6 +105,12 @@ export function AdminPanel() {
   // Modals for Teams
   const [teamsModalTitle, setTeamsModalTitle] = useState('');
   const [teamsModalList, setTeamsModalList] = useState<Team[] | null>(null);
+
+  // Users Data
+  const [allUsers, setAllUsers] = useState<any[]>([]);
+  const [usersModalTitle, setUsersModalTitle] = useState('');
+  const [usersModalList, setUsersModalList] = useState<any[] | null>(null);
+  const [isChangingRole, setIsChangingRole] = useState(false);
 
   // Match Management
   const [matchToCancel, setMatchToCancel] = useState<Match | null>(null);
@@ -115,7 +127,7 @@ export function AdminPanel() {
 
   // Forms
   const [isAddingBanner, setIsAddingBanner] = useState(false);
-  const [bannerForm, setBannerForm] = useState({ imageUrl: '', link: '', type: 'promo' as 'promo', active: true, order: 0 });
+  const [bannerForm, setBannerForm] = useState({ imageUrl: '', link: '', type: 'promo' as 'promo', active: true, order: 0, mainText: '' });
 
   const [isAddingComp, setIsAddingComp] = useState(false);
   const [compForm, setCompForm] = useState<{
@@ -172,18 +184,21 @@ export function AdminPanel() {
   useEffect(() => {
     async function fetchData() {
       try {
-        const [bannersSnap, compsSnap, teamsSnap, matchesSnap, festivalSnap, settingsSnap, rankingSnap] = await Promise.all([
+        const [bannersSnap, compsSnap, teamsSnap, matchesSnap, festivalSnap, settingsSnap, rankingSnap, usersSnap, availabilitiesSnap] = await Promise.all([
           getDocs(collection(db, 'banners')),
           getDocs(collection(db, 'competitions')),
           getDocs(collection(db, 'teams')),
           getDocs(collection(db, 'matches')),
           getDocs(collection(db, 'festivalGames')),
           getDoc(doc(db, 'settings', 'general')),
-          getDoc(doc(db, 'settings', 'ranking'))
+          getDoc(doc(db, 'settings', 'ranking')),
+          getDocs(collection(db, 'users')),
+          getDocs(collection(db, 'availabilities'))
         ]);
         
         setBanners(bannersSnap.docs.map(d => ({ id: d.id, ...d.data() } as Banner)));
         setCompetitions(compsSnap.docs.map(d => ({ id: d.id, ...d.data() } as Competition)));
+        setAllUsers(usersSnap.docs.map(d => ({ id: d.id, ...d.data() })));
 
         if (settingsSnap.exists()) {
           setSiteLogo(settingsSnap.data().logoUrl || null);
@@ -209,7 +224,16 @@ export function AdminPanel() {
           });
         }
 
-        const teams = teamsSnap.docs.map(d => ({ id: d.id, ...d.data() } as Team));
+        const availabilities = availabilitiesSnap.docs.map(d => d.data());
+        const teamsWithAvailSet = new Set(availabilities.map(a => a.teamId));
+
+        const teams = teamsSnap.docs
+          .filter(d => !d.data().deleted)
+          .map(d => ({ 
+            id: d.id, 
+            ...d.data(),
+            hasAvailability: teamsWithAvailSet.has(d.id)
+          } as Team));
         const regularMatches = matchesSnap.docs.map(d => ({ id: d.id, collectionName: 'matches', ...d.data() } as Match));
         const festivalMatches = festivalSnap.docs.map(d => ({ id: d.id, collectionName: 'festivalGames', ...d.data() } as Match));
         
@@ -299,6 +323,7 @@ export function AdminPanel() {
         
         const activeHomeTeams = activeTeamsList.filter(t => t.subscription?.plan?.includes('mandante') || t.subscription?.plan?.includes('premium')).length;
         const activeAwayTeams = activeTeamsList.filter(t => t.subscription?.plan?.includes('visitante')).length;
+        const teamsWithoutAvailability = teams.filter(t => !t.hasAvailability).length;
 
         const todayStr = now.toISOString().split('T')[0];
         const matchesToday = combinedMatches.filter(m => m.date && m.date.startsWith(todayStr)).length;
@@ -345,6 +370,7 @@ export function AdminPanel() {
           activeHomeTeams,
           activeAwayTeams,
           inactiveTeams: teams.length - activeTeamsList.length,
+          teamsWithoutAvailability,
           totalMatches: combinedMatches.length,
           matchesToday
         });
@@ -408,7 +434,7 @@ export function AdminPanel() {
       const docRef = await addDoc(collection(db, 'banners'), newBanner);
       setBanners([...banners, { id: docRef.id, ...newBanner }]);
       setIsAddingBanner(false);
-      setBannerForm({ imageUrl: '', link: '', type: 'promo', active: true, order: 0 });
+      setBannerForm({ imageUrl: '', link: '', type: 'promo', active: true, order: 0, mainText: '' });
       showToast("Banner adicionado com sucesso!", "success");
     } catch (error) {
       console.error("Error adding banner:", error);
@@ -629,6 +655,28 @@ export function AdminPanel() {
     setTeamsModalList(allTeams.filter(filterFn));
   };
 
+  const openUsersModal = () => {
+    setUsersModalTitle('Gerenciar Usuários');
+    setUsersModalList(allUsers);
+  };
+
+  const handleChangeUserRole = async (userId: string, newRole: string) => {
+    setIsChangingRole(true);
+    try {
+      await updateDoc(doc(db, 'users', userId), { role: newRole });
+      setAllUsers(prev => prev.map(u => u.id === userId ? { ...u, role: newRole } : u));
+      if (usersModalList) {
+        setUsersModalList(prev => prev ? prev.map(u => u.id === userId ? { ...u, role: newRole } : u) : null);
+      }
+      showToast("Perfil atualizado com sucesso.", "success");
+    } catch (error) {
+      console.error("Error changing user role:", error);
+      showToast("Erro ao atualizar perfil.", "error");
+    } finally {
+      setIsChangingRole(false);
+    }
+  };
+
   const handleCancelMatch = async () => {
     if (!matchToCancel || !cancelReason.trim()) return;
     setIsCancelingMatch(true);
@@ -762,7 +810,7 @@ export function AdminPanel() {
       </header>
 
       {/* Indicadores Operacionais */}
-      <section className="grid grid-cols-2 md:grid-cols-5 gap-4">
+      <section className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
         <div 
           onClick={() => openTeamsModal('Todos os Times', () => true)}
           className="bg-white p-4 rounded-xl border border-zinc-200 shadow-sm flex flex-col justify-between cursor-pointer hover:border-emerald-500 transition-colors"
@@ -822,6 +870,29 @@ export function AdminPanel() {
             <span className="text-xs font-medium uppercase tracking-wider">Times Inativos</span>
           </div>
           <div className="text-3xl font-bold text-red-500">{metrics.inactiveTeams}</div>
+        </div>
+
+        <div 
+          onClick={() => openTeamsModal('Sem Disponibilidade', t => !t.hasAvailability)}
+          className="bg-white p-4 rounded-xl border border-orange-200 shadow-sm flex flex-col justify-between relative overflow-hidden cursor-pointer hover:border-orange-500 transition-colors"
+        >
+          <div className="absolute top-0 right-0 w-16 h-16 bg-orange-50 rounded-bl-full -z-10"></div>
+          <div className="flex items-center gap-2 text-orange-600 mb-2">
+            <CalendarIcon className="w-4 h-4" />
+            <span className="text-xs font-medium uppercase tracking-wider">Sem Agenda</span>
+          </div>
+          <div className="text-3xl font-bold text-orange-600">{metrics.teamsWithoutAvailability}</div>
+        </div>
+
+        <div 
+          onClick={openUsersModal}
+          className="bg-white p-4 rounded-xl border border-zinc-200 shadow-sm flex flex-col justify-between cursor-pointer hover:border-emerald-500 transition-colors"
+        >
+          <div className="flex items-center gap-2 text-zinc-500 mb-2">
+            <Users className="w-4 h-4" />
+            <span className="text-xs font-medium uppercase tracking-wider">Usuários</span>
+          </div>
+          <div className="text-3xl font-bold text-zinc-900">{allUsers.length}</div>
         </div>
 
         <div className="bg-white p-4 rounded-xl border border-zinc-200 shadow-sm flex flex-col justify-between">
@@ -1654,8 +1725,8 @@ export function AdminPanel() {
                     <li key={team.id} className="p-4 bg-zinc-50 rounded-xl border border-zinc-200 flex items-center justify-between">
                       <div className="flex items-center gap-4">
                         <div className="w-12 h-12 rounded-full bg-zinc-200 flex items-center justify-center overflow-hidden flex-shrink-0">
-                          {team.logo ? (
-                            <img src={team.logo} alt={team.name} className="w-full h-full object-cover" />
+                          {team.logoUrl ? (
+                            <img src={team.logoUrl} alt={team.name} className="w-full h-full object-cover" />
                           ) : (
                             <Shield className="w-6 h-6 text-zinc-400" />
                           )}
@@ -1664,11 +1735,11 @@ export function AdminPanel() {
                           <h4 className="font-bold text-zinc-900">{team.name}</h4>
                           <div className="text-sm text-zinc-500 flex items-center gap-2">
                             <span>{team.managerName}</span>
-                            {team.managerPhone && (
+                            {team.whatsapp && (
                               <>
                                 <span>•</span>
-                                <a href={`https://wa.me/${team.managerPhone.replace(/\D/g, '')}`} target="_blank" rel="noopener noreferrer" className="text-emerald-600 hover:underline">
-                                  {team.managerPhone}
+                                <a href={`https://wa.me/${team.whatsapp.replace(/\D/g, '')}`} target="_blank" rel="noopener noreferrer" className="text-emerald-600 hover:underline">
+                                  {team.whatsapp}
                                 </a>
                               </>
                             )}
@@ -1689,6 +1760,73 @@ export function AdminPanel() {
                   ))}
                 </ul>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Users List Modal */}
+      {usersModalList && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl w-full max-w-4xl max-h-[90vh] flex flex-col shadow-xl">
+            <div className="p-6 border-b border-zinc-100 flex items-center justify-between">
+              <h3 className="text-xl font-bold text-zinc-900">{usersModalTitle}</h3>
+              <button 
+                onClick={() => setUsersModalList(null)}
+                className="text-zinc-400 hover:text-zinc-600 transition-colors"
+              >
+                <X className="w-6 h-6" />
+              </button>
+            </div>
+            <div className="p-6 overflow-y-auto flex-1">
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm text-left">
+                  <thead className="text-xs text-zinc-500 uppercase bg-zinc-50 border-b border-zinc-200">
+                    <tr>
+                      <th className="px-4 py-3 font-medium">Nome</th>
+                      <th className="px-4 py-3 font-medium">Email</th>
+                      <th className="px-4 py-3 font-medium">Perfil Atual</th>
+                      <th className="px-4 py-3 font-medium">Ações</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-zinc-100">
+                    {usersModalList.map(u => (
+                      <tr key={u.id} className="hover:bg-zinc-50 transition-colors">
+                        <td className="px-4 py-3 font-medium text-zinc-900">{u.displayName || 'Sem Nome'}</td>
+                        <td className="px-4 py-3 text-zinc-600">{u.email}</td>
+                        <td className="px-4 py-3">
+                          <span className={cn(
+                            "px-2 py-1 text-xs font-medium rounded-full",
+                            u.role === 'admin' ? "bg-purple-100 text-purple-700" :
+                            u.role === 'field_manager' ? "bg-emerald-100 text-emerald-700" :
+                            "bg-blue-100 text-blue-700"
+                          )}>
+                            {u.role === 'admin' ? 'Administrador' :
+                             u.role === 'field_manager' ? 'Gestor de Quadra' : 'Manager'}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3">
+                          <select
+                            value={u.role || 'manager'}
+                            onChange={(e) => handleChangeUserRole(u.id, e.target.value)}
+                            disabled={isChangingRole || u.email === 'luis.silva.avarese@gmail.com'}
+                            className="p-1 text-sm border border-zinc-300 rounded focus:ring-2 focus:ring-emerald-500 outline-none disabled:opacity-50"
+                          >
+                            <option value="manager">Manager (Padrão)</option>
+                            <option value="field_manager">Gestor de Quadra</option>
+                            <option value="admin">Administrador</option>
+                          </select>
+                        </td>
+                      </tr>
+                    ))}
+                    {usersModalList.length === 0 && (
+                      <tr>
+                        <td colSpan={4} className="px-4 py-8 text-center text-zinc-500">Nenhum usuário encontrado.</td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
             </div>
           </div>
         </div>

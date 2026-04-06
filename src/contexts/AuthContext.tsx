@@ -18,7 +18,7 @@ interface UserProfile {
   email: string;
   displayName: string;
   photoURL: string;
-  role: 'admin' | 'manager';
+  role: 'admin' | 'manager' | 'field_manager';
   teamId?: string;
   createdAt: string;
 }
@@ -27,10 +27,11 @@ interface AuthContextType {
   user: User | null;
   profile: UserProfile | null;
   isAdmin: boolean;
+  isFieldManager: boolean;
   loading: boolean;
   activeTeamId: string | null;
   myTeams: any[];
-  setActiveTeamId: (teamId: string) => Promise<void>;
+  setActiveTeamId: (teamId: string | null) => Promise<void>;
   signInWithGoogle: () => Promise<void>;
   signInWithEmail: (email: string, password: string) => Promise<void>;
   signUpWithEmail: (email: string, password: string, name: string) => Promise<void>;
@@ -48,6 +49,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [myTeams, setMyTeams] = useState<any[]>([]);
 
   const isAdmin = user?.email === 'luis.silva.avarese@gmail.com' || profile?.role === 'admin';
+  const isFieldManager = profile?.role === 'field_manager';
 
   useEffect(() => {
     let unsubscribeTeams: () => void;
@@ -89,12 +91,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         // Fetch teams managed by user
         const q = query(collection(db, 'teams'), where('managerId', '==', currentUser.uid));
         unsubscribeTeams = onSnapshot(q, (snap) => {
-          const teams = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+          const teams = snap.docs.map(d => ({ id: d.id, ...d.data() })).filter((t: any) => !t.deleted);
           setMyTeams(teams);
           
           // If no active team is set but user has teams, set the first one
           if (!currentProfile.teamId && teams.length > 0) {
             setActiveTeamId(teams[0].id);
+          } else if (currentProfile.teamId && !teams.some(t => t.id === currentProfile.teamId)) {
+            // If active team is deleted, switch to another one or null
+            setActiveTeamId(teams.length > 0 ? teams[0].id : null);
           }
         });
 
@@ -114,7 +119,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
-  const setActiveTeamId = async (teamId: string) => {
+  const setActiveTeamId = async (teamId: string | null) => {
     if (!user) return;
     setActiveTeamIdState(teamId);
     setProfile(prev => prev ? { ...prev, teamId } : null);
@@ -187,7 +192,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   return (
-    <AuthContext.Provider value={{ user, profile, isAdmin, loading, activeTeamId, myTeams, setActiveTeamId, signInWithGoogle, signInWithEmail, signUpWithEmail, resetPassword, logout }}>
+    <AuthContext.Provider value={{ user, profile, isAdmin, isFieldManager, loading, activeTeamId, myTeams, setActiveTeamId, signInWithGoogle, signInWithEmail, signUpWithEmail, resetPassword, logout }}>
       {!loading && children}
     </AuthContext.Provider>
   );

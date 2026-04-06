@@ -44,9 +44,8 @@ service cloud.firestore {
 
     function isValidUser() {
       return hasRequiredFields(['uid', 'email', 'role']) &&
-             request.resource.data.uid == request.auth.uid &&
              request.resource.data.email is string &&
-             request.resource.data.role in ['admin', 'manager'] &&
+             request.resource.data.role in ['admin', 'manager', 'field_manager'] &&
              (!('createdAt' in request.resource.data) || request.resource.data.createdAt is string);
     }
 
@@ -140,6 +139,22 @@ service cloud.firestore {
              request.resource.data.body is string && request.resource.data.body.size() > 0 && request.resource.data.body.size() < 1600;
     }
 
+    function isValidField() {
+      return hasRequiredFields(['name', 'type', 'address', 'city', 'neighborhood', 'description', 'capacity', 'pricePerHour', 'operatingHours', 'managerId', 'photos', 'createdAt']) &&
+             request.resource.data.name is string && request.resource.data.name.size() > 0 &&
+             request.resource.data.type in ['Fut7', 'Futsal', 'Society', 'Campo'] &&
+             request.resource.data.managerId == request.auth.uid &&
+             request.resource.data.createdAt is string;
+    }
+
+    function isValidReservation() {
+      return hasRequiredFields(['fieldId', 'teamName', 'date', 'startTime', 'endTime', 'duration', 'value', 'status', 'managerId', 'createdAt']) &&
+             request.resource.data.fieldId is string &&
+             request.resource.data.date is string &&
+             request.resource.data.status in ['pending', 'confirmed', 'cancelled', 'paid'] &&
+             request.resource.data.createdAt is string;
+    }
+
     function isValidFestivalGame() {
       return hasRequiredFields(['competitionId', 'date', 'startTime', 'endTime', 'createdAt']) &&
              request.resource.data.competitionId is string &&
@@ -162,15 +177,15 @@ service cloud.firestore {
 
     match /users/{userId} {
       allow read: if isAuthenticated();
-      allow create: if isAuthenticated() && isOwner(userId) && isValidUser() && (isAdmin() || request.resource.data.role == 'manager');
-      allow update: if isAuthenticated() && isOwner(userId) && isValidUser() && areImmutableFieldsUnchanged(['uid', 'createdAt']) && (isAdmin() || request.resource.data.role == resource.data.role);
+      allow create: if isAuthenticated() && isOwner(userId) && isValidUser() && request.resource.data.uid == request.auth.uid && (isAdmin() || request.resource.data.role == 'manager');
+      allow update: if isAuthenticated() && isValidUser() && areImmutableFieldsUnchanged(['uid', 'createdAt']) && (isAdmin() || (isOwner(userId) && request.resource.data.role == resource.data.role));
     }
 
     match /teams/{teamId} {
       allow read: if isAuthenticated();
       allow create: if isAuthenticated() && isValidTeam();
       allow update: if isAuthenticated() && (isAdmin() || (isTeamManager(teamId) && areImmutableFieldsUnchanged(['managerId', 'createdAt'])));
-      allow delete: if isAdmin();
+      allow delete: if isAdmin() || isTeamManager(teamId);
     }
 
     match /players/{playerId} {
@@ -238,6 +253,20 @@ service cloud.firestore {
       allow create: if isAdmin() && isValidFestivalGame();
       allow update: if isAdmin() || (isAuthenticated() && areImmutableFieldsUnchanged(['competitionId', 'date', 'startTime', 'endTime', 'createdAt']));
       allow delete: if isAdmin();
+    }
+
+    match /fields/{fieldId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && isValidField();
+      allow update: if isAuthenticated() && isOwner(resource.data.managerId) && isValidField() && areImmutableFieldsUnchanged(['managerId', 'createdAt']);
+      allow delete: if isAuthenticated() && isOwner(resource.data.managerId);
+    }
+
+    match /reservations/{reservationId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && isValidReservation();
+      allow update: if isAuthenticated() && isOwner(resource.data.managerId) && isValidReservation() && areImmutableFieldsUnchanged(['managerId', 'createdAt']);
+      allow delete: if isAuthenticated() && isOwner(resource.data.managerId);
     }
 
     match /settings/{settingId} {

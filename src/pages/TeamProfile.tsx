@@ -1,8 +1,9 @@
 import { useState, useEffect, ChangeEvent, FormEvent } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { collection, doc, getDoc, getDocs, query, setDoc, where, addDoc, updateDoc, deleteDoc } from 'firebase/firestore';
 import { db } from '../firebase';
-import { Users, Plus, Edit2, Shield, AlertCircle, Trash2, Upload, Check, X, DollarSign, ChevronLeft, ChevronRight, Award, CalendarIcon, MapPin } from 'lucide-react';
+import { Users, Plus, Edit2, Shield, AlertCircle, Trash2, Upload, Check, X, DollarSign, ChevronLeft, ChevronRight, Award, CalendarIcon, MapPin, MessageCircle } from 'lucide-react';
 import { format, addMonths, subMonths } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import { cn } from '../lib/utils';
@@ -63,10 +64,12 @@ interface Player {
 }
 
 export function TeamProfile() {
+  const navigate = useNavigate();
   const { user, profile, activeTeamId, setActiveTeamId } = useAuth();
   const [team, setTeam] = useState<Team | null>(null);
   const [players, setPlayers] = useState<Player[]>([]);
   const [loading, setLoading] = useState(true);
+  const [isSaving, setIsSaving] = useState(false);
   const [isEditingTeam, setIsEditingTeam] = useState(false);
   const [isAddingPlayer, setIsAddingPlayer] = useState(false);
   const [activeTab, setActiveTab] = useState<'elenco' | 'financeiro'>('elenco');
@@ -83,6 +86,9 @@ export function TeamProfile() {
 
   // Modals & Toasts
   const [confirmDeletePlayer, setConfirmDeletePlayer] = useState<string | null>(null);
+  const [confirmDeleteTeam, setConfirmDeleteTeam] = useState<boolean>(false);
+  const [showAvailabilityModal, setShowAvailabilityModal] = useState(false);
+  const [newlyCreatedTeamId, setNewlyCreatedTeamId] = useState<string | null>(null);
   const [toastMessage, setToastMessage] = useState<{title: string, type: 'success' | 'error'} | null>(null);
 
   const showToast = (title: string, type: 'success' | 'error') => {
@@ -229,7 +235,8 @@ export function TeamProfile() {
           
           teamData.stats = { wins, draws, losses, goalsFor, goalsAgainst, points };
           
-          const earnedBadges = calculateBadges(allMatches, teamData.id, []);
+          const allMatchesData = allMatches.map(d => ({ id: d.id, ...d.data() }));
+          const earnedBadges = calculateBadges(allMatchesData, teamData, []);
           setMyBadges(earnedBadges);
 
           // Calculate upcoming matches
@@ -321,8 +328,23 @@ export function TeamProfile() {
 
   const handleSaveTeam = async (e: FormEvent) => {
     e.preventDefault();
-    if (!user) return;
+    if (!user || isSaving) return;
 
+    // Manual validation for better mobile UX (especially iOS Safari)
+    if (!teamForm.name.trim()) return showToast("Preencha o Nome do Time", "error");
+    if (!teamForm.managerName.trim()) return showToast("Preencha o Nome do Responsável", "error");
+    if (!teamForm.whatsapp.trim()) return showToast("Preencha o WhatsApp", "error");
+    if (!teamForm.state) return showToast("Selecione o Estado", "error");
+    if (!teamForm.city) return showToast("Selecione a Cidade", "error");
+    if (teamForm.state === 'SP' && teamForm.city === 'São Paulo' && !teamForm.zone) {
+      return showToast("Selecione a Zona", "error");
+    }
+    if (!teamForm.neighborhood.trim()) return showToast("Preencha o Bairro", "error");
+    if (!teamForm.uniformColor.trim()) return showToast("Preencha a Cor do Uniforme", "error");
+    if (!teamForm.gameType) return showToast("Selecione o Tipo de Jogo", "error");
+    if (!teamForm.teamLevel) return showToast("Selecione o Nível do Time", "error");
+
+    setIsSaving(true);
     try {
       if (team) {
         // Update existing team
@@ -377,12 +399,49 @@ export function TeamProfile() {
         console.log("Updating user profile with teamId:", newTeamRef.id);
         await setActiveTeamId(newTeamRef.id);
         console.log("User profile updated successfully");
+        
+        setNewlyCreatedTeamId(newTeamRef.id);
+        setShowAvailabilityModal(true);
       }
+      
+      if (team) {
+        showToast("Time salvo com sucesso!", "success");
+      }
+      
       setIsEditingTeam(false);
-      showToast("Time salvo com sucesso!", "success");
     } catch (error) {
       console.error("Error saving team:", error);
       showToast("Erro ao salvar o time. Verifique as permissões. Detalhes no console.", "error");
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const handleDeleteTeam = () => {
+    setConfirmDeleteTeam(true);
+  };
+
+  const confirmDeleteTeamAction = async () => {
+    if (!team || !user) return;
+    
+    try {
+      await updateDoc(doc(db, 'teams', team.id), { deleted: true });
+      showToast("Time excluído com sucesso!", "success");
+      
+      // Check if user has other teams
+      const userTeamsSnap = await getDocs(query(collection(db, 'teams'), where('managerId', '==', user.uid)));
+      const activeTeams = userTeamsSnap.docs.filter(d => !d.data().deleted);
+      
+      if (activeTeams.length > 0) {
+        await setActiveTeamId(activeTeams[0].id);
+      } else {
+        await setActiveTeamId(null);
+      }
+      setIsEditingTeam(false);
+      setConfirmDeleteTeam(false);
+    } catch (error) {
+      console.error("Error deleting team:", error);
+      showToast("Erro ao excluir o time.", "error");
     }
   };
 
@@ -456,6 +515,66 @@ export function TeamProfile() {
     }
   };
 
+  const handleAvailabilitySelection = async (type: 'home' | 'away') => {
+    if (!newlyCreatedTeamId) return;
+
+    try {
+      const now = new Date();
+
+      // Update team subscription
+      const teamRef = doc(db, 'teams', newlyCreatedTeamId);
+      
+      if (type === 'away') {
+        await updateDoc(teamRef, {
+          subscription: {
+            status: 'active',
+            plan: 'visitante_free',
+            startedAt: now.toISOString(),
+            expiresAt: '2099-12-31T23:59:59.000Z'
+          }
+        });
+        showToast("Time criado como Visitante com sucesso!", "success");
+      } else {
+        if ((profile as any)?.hasUsedTrial) {
+          // If they already used the trial, they don't get the 2 months free.
+          // They must pay to use the app as Mandante.
+          await updateDoc(teamRef, {
+            subscription: {
+              status: 'pending',
+              plan: 'premium_mensal', // Default to monthly pending
+              startedAt: now.toISOString(),
+              expiresAt: now.toISOString() // Expired immediately
+            }
+          });
+          showToast("Time criado como Mandante! Você precisa assinar um plano para continuar.", "success");
+        } else {
+          const expiresAt = addMonths(now, 2);
+          await updateDoc(teamRef, {
+            subscription: {
+              status: 'active',
+              plan: 'mandante_trial',
+              startedAt: now.toISOString(),
+              expiresAt: expiresAt.toISOString()
+            }
+          });
+          if (user) {
+            await updateDoc(doc(db, 'users', user.uid), {
+              hasUsedTrial: true
+            });
+          }
+          showToast("Time criado como Mandante com 2 meses de isenção!", "success");
+        }
+      }
+
+      setShowAvailabilityModal(false);
+      setNewlyCreatedTeamId(null);
+      navigate('/calendar', { state: { openAddAvailability: true } });
+    } catch (error) {
+      console.error("Error setting availability:", error);
+      showToast("Erro ao definir disponibilidade.", "error");
+    }
+  };
+
   if (loading) {
     return <div className="flex justify-center py-12"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-emerald-500"></div></div>;
   }
@@ -468,6 +587,23 @@ export function TeamProfile() {
           <p className="text-zinc-500">Gerencie o perfil e elenco do seu time.</p>
         </div>
         <div className="flex gap-2">
+          <a 
+            href={team ? "https://chat.whatsapp.com/IvYGzIMr6Vl738aSNDDQK1" : undefined}
+            target={team ? "_blank" : undefined}
+            rel={team ? "noopener noreferrer" : undefined}
+            className={cn(
+              "px-4 py-2 rounded-xl font-medium flex items-center gap-2 transition-colors",
+              team 
+                ? "bg-[#25D366] hover:bg-[#20bd5a] text-white" 
+                : "bg-zinc-200 text-zinc-400 cursor-not-allowed"
+            )}
+            title={!team ? "Cadastre um time para acessar o grupo oficial" : "Entrar no grupo oficial"}
+            onClick={(e) => {
+              if (!team) e.preventDefault();
+            }}
+          >
+            <MessageCircle className="w-4 h-4" /> Grupo Oficial
+          </a>
           {team && !isEditingTeam && (
             <button 
               onClick={() => {
@@ -513,20 +649,19 @@ export function TeamProfile() {
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
               <label className="block text-sm font-medium text-zinc-700 mb-1">Nome do Time <span className="text-red-500">*</span></label>
-              <input required type="text" value={teamForm.name} onChange={e => setTeamForm({...teamForm, name: e.target.value})} className="w-full p-2 border border-zinc-300 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none" placeholder="Ex: Várzea FC" />
+              <input type="text" value={teamForm.name} onChange={e => setTeamForm({...teamForm, name: e.target.value})} className="w-full p-2 border border-zinc-300 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none" placeholder="Ex: Várzea FC" />
             </div>
             <div>
               <label className="block text-sm font-medium text-zinc-700 mb-1">Nome do Responsável <span className="text-red-500">*</span></label>
-              <input required type="text" value={teamForm.managerName} onChange={e => setTeamForm({...teamForm, managerName: e.target.value})} className="w-full p-2 border border-zinc-300 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none" placeholder="Nome completo" />
+              <input type="text" value={teamForm.managerName} onChange={e => setTeamForm({...teamForm, managerName: e.target.value})} className="w-full p-2 border border-zinc-300 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none" placeholder="Nome completo" />
             </div>
             <div>
               <label className="block text-sm font-medium text-zinc-700 mb-1">WhatsApp <span className="text-red-500">*</span></label>
-              <input required type="tel" value={teamForm.whatsapp} onChange={e => setTeamForm({...teamForm, whatsapp: e.target.value})} className="w-full p-2 border border-zinc-300 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none" placeholder="(11) 99999-9999" />
+              <input type="tel" value={teamForm.whatsapp} onChange={e => setTeamForm({...teamForm, whatsapp: e.target.value})} className="w-full p-2 border border-zinc-300 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none" placeholder="(11) 99999-9999" />
             </div>
             <div>
               <label className="block text-sm font-medium text-zinc-700 mb-1">Estado <span className="text-red-500">*</span></label>
               <select 
-                required 
                 value={teamForm.state} 
                 onChange={e => setTeamForm({...teamForm, state: e.target.value, city: ''})} 
                 className="w-full p-2 border border-zinc-300 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none bg-white"
@@ -540,7 +675,6 @@ export function TeamProfile() {
             <div>
               <label className="block text-sm font-medium text-zinc-700 mb-1">Cidade <span className="text-red-500">*</span></label>
               <select 
-                required 
                 value={teamForm.city} 
                 onChange={e => setTeamForm({...teamForm, city: e.target.value, zone: ''})} 
                 disabled={!teamForm.state}
@@ -556,7 +690,6 @@ export function TeamProfile() {
               <div>
                 <label className="block text-sm font-medium text-zinc-700 mb-1">Zona <span className="text-red-500">*</span></label>
                 <select 
-                  required 
                   value={teamForm.zone} 
                   onChange={e => setTeamForm({...teamForm, zone: e.target.value})} 
                   className="w-full p-2 border border-zinc-300 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none bg-white"
@@ -572,15 +705,15 @@ export function TeamProfile() {
             )}
             <div>
               <label className="block text-sm font-medium text-zinc-700 mb-1">Bairro <span className="text-red-500">*</span></label>
-              <input required type="text" value={teamForm.neighborhood} onChange={e => setTeamForm({...teamForm, neighborhood: e.target.value})} className="w-full p-2 border border-zinc-300 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none" />
+              <input type="text" value={teamForm.neighborhood} onChange={e => setTeamForm({...teamForm, neighborhood: e.target.value})} className="w-full p-2 border border-zinc-300 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none" />
             </div>
             <div>
               <label className="block text-sm font-medium text-zinc-700 mb-1">Uniforme (Cor) <span className="text-red-500">*</span></label>
-              <input required type="text" value={teamForm.uniformColor} onChange={e => setTeamForm({...teamForm, uniformColor: e.target.value})} className="w-full p-2 border border-zinc-300 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none" placeholder="Ex: Azul e Branco" />
+              <input type="text" value={teamForm.uniformColor} onChange={e => setTeamForm({...teamForm, uniformColor: e.target.value})} className="w-full p-2 border border-zinc-300 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none" placeholder="Ex: Azul e Branco" />
             </div>
             <div>
               <label className="block text-sm font-medium text-zinc-700 mb-1">Tipo de Jogo <span className="text-red-500">*</span></label>
-              <select required value={teamForm.gameType} onChange={e => setTeamForm({...teamForm, gameType: e.target.value})} className="w-full p-2 border border-zinc-300 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none bg-white">
+              <select value={teamForm.gameType} onChange={e => setTeamForm({...teamForm, gameType: e.target.value})} className="w-full p-2 border border-zinc-300 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none bg-white">
                 <option value="">Selecione</option>
                 <option value="Campo">Campo</option>
                 <option value="FUT7">FUT7</option>
@@ -589,7 +722,7 @@ export function TeamProfile() {
             </div>
             <div>
               <label className="block text-sm font-medium text-zinc-700 mb-1">Nível do Time <span className="text-red-500">*</span></label>
-              <select required value={teamForm.teamLevel} onChange={e => setTeamForm({...teamForm, teamLevel: e.target.value})} className="w-full p-2 border border-zinc-300 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none bg-white">
+              <select value={teamForm.teamLevel} onChange={e => setTeamForm({...teamForm, teamLevel: e.target.value})} className="w-full p-2 border border-zinc-300 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none bg-white">
                 <option value="">Selecione</option>
                 <option value="🟢 Bronze (Iniciante)">🟢 Bronze (Iniciante)</option>
                 <option value="🔵 Prata (Amador)">🔵 Prata (Amador)</option>
@@ -634,18 +767,6 @@ export function TeamProfile() {
             </div>
 
             <div className="md:col-span-2 space-y-3 mt-2 border-t border-zinc-100 pt-4">
-              <label className="block text-sm font-medium text-zinc-700">Banner do Time</label>
-              <div className="flex items-center gap-4">
-                <input type="file" accept="image/*" onChange={(e) => handleImageUpload(e, 'bannerUrl')} className="block w-full text-sm text-zinc-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-medium file:bg-emerald-50 file:text-emerald-700 hover:file:bg-emerald-100" />
-              </div>
-              {teamForm.bannerUrl && (
-                <div className="mt-2 h-32 w-full rounded-lg overflow-hidden border border-zinc-200">
-                  <img src={teamForm.bannerUrl} alt="Banner Preview" className="w-full h-full object-cover" />
-                </div>
-              )}
-            </div>
-
-            <div className="md:col-span-2 space-y-3 mt-2 border-t border-zinc-100 pt-4">
               <label className="block text-sm font-medium text-zinc-700">Escudo do Time</label>
               <div className="flex items-center gap-4">
                 <input type="file" accept="image/*" onChange={(e) => handleImageUpload(e, 'logoUrl')} className="block w-full text-sm text-zinc-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-medium file:bg-emerald-50 file:text-emerald-700 hover:file:bg-emerald-100" />
@@ -655,34 +776,39 @@ export function TeamProfile() {
               </div>
             </div>
           </div>
-          <div className="flex justify-end gap-2 pt-4">
-            {team && (
-              <button type="button" onClick={() => setIsEditingTeam(false)} className="px-4 py-2 text-zinc-600 hover:bg-zinc-100 rounded-lg font-medium">
-                Cancelar
+          <div className="flex justify-between items-center pt-4">
+            {team ? (
+              <button type="button" onClick={handleDeleteTeam} className="px-4 py-2 text-red-600 hover:bg-red-50 rounded-lg font-medium transition-colors">
+                Excluir Time
               </button>
-            )}
-            <button type="submit" className="bg-emerald-500 hover:bg-emerald-600 text-white px-4 py-2 rounded-lg font-medium">
-              Salvar
-            </button>
+            ) : <div></div>}
+            <div className="flex gap-2">
+              {team && (
+                <button type="button" onClick={() => setIsEditingTeam(false)} disabled={isSaving} className="px-4 py-2 text-zinc-600 hover:bg-zinc-100 rounded-lg font-medium disabled:opacity-50">
+                  Cancelar
+                </button>
+              )}
+              <button type="submit" disabled={isSaving} className="bg-emerald-500 hover:bg-emerald-600 text-white px-4 py-2 rounded-lg font-medium disabled:opacity-50 flex items-center gap-2">
+                {isSaving ? (
+                  <>
+                    <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                    Salvando...
+                  </>
+                ) : (
+                  'Salvar'
+                )}
+              </button>
+            </div>
           </div>
         </form>
       ) : team ? (
-        <div className="bg-white rounded-2xl border border-zinc-200 shadow-sm overflow-hidden relative">
-          {team.bannerUrl ? (
-            <div className="h-48 w-full relative">
-              <img src={team.bannerUrl} alt="Banner" className="w-full h-full object-cover" />
-              <div className="absolute inset-0 bg-gradient-to-t from-black/60 to-transparent"></div>
-            </div>
-          ) : (
-            <div className="h-32 w-full bg-gradient-to-r from-zinc-800 to-zinc-900"></div>
-          )}
-          
-          <button onClick={() => setIsEditingTeam(true)} className="absolute top-4 right-4 text-white hover:text-emerald-400 p-2 rounded-lg hover:bg-black/20 transition-colors z-10 backdrop-blur-sm">
+        <div className="bg-white rounded-2xl border border-zinc-200 shadow-sm overflow-hidden relative pt-12">
+          <button onClick={() => setIsEditingTeam(true)} className="absolute top-4 right-4 text-zinc-400 hover:text-emerald-500 p-2 rounded-lg hover:bg-zinc-100 transition-colors z-10">
             <Edit2 className="w-5 h-5" />
           </button>
           
           <div className="px-6 pb-6 relative">
-            <div className="flex flex-col md:flex-row items-center md:items-end gap-6 -mt-16 md:-mt-20 mb-6">
+            <div className="flex flex-col md:flex-row items-center md:items-start gap-6 mb-6">
               <div 
                 className="w-32 h-32 md:w-40 md:h-40 bg-zinc-100 rounded-full flex items-center justify-center overflow-hidden border-4 shadow-lg flex-shrink-0"
                 style={{ 
@@ -1008,6 +1134,31 @@ export function TeamProfile() {
       )}
 
       {/* Modals */}
+      {confirmDeleteTeam && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl p-6 max-w-sm w-full shadow-xl">
+            <h3 className="text-xl font-bold text-zinc-900 mb-2">Excluir Time</h3>
+            <p className="text-zinc-600 mb-6">
+              Tem certeza que deseja excluir este time? Esta ação não pode ser desfeita e o time não aparecerá mais nas buscas.
+            </p>
+            <div className="flex justify-end gap-3">
+              <button 
+                onClick={() => setConfirmDeleteTeam(false)}
+                className="px-4 py-2 text-sm font-medium text-zinc-600 hover:bg-zinc-100 rounded-lg transition-colors"
+              >
+                Cancelar
+              </button>
+              <button 
+                onClick={confirmDeleteTeamAction}
+                className="px-4 py-2 text-sm font-medium text-white bg-red-500 hover:bg-red-600 rounded-lg transition-colors"
+              >
+                Excluir
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {confirmDeletePlayer && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-2xl p-6 max-w-sm w-full shadow-xl">
@@ -1027,6 +1178,45 @@ export function TeamProfile() {
                 className="px-4 py-2 text-sm font-medium text-white bg-red-500 hover:bg-red-600 rounded-lg transition-colors"
               >
                 Remover
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showAvailabilityModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl p-6 max-w-md w-full shadow-xl">
+            <h3 className="text-xl font-bold text-zinc-900 mb-2">Disponibilidade do Time</h3>
+            <p className="text-zinc-600 mb-6">
+              Como seu time irá jogar? Selecione abaixo para configurar sua disponibilidade inicial.
+            </p>
+            
+            <div className="space-y-4">
+              <button
+                onClick={() => handleAvailabilitySelection('away')}
+                className="w-full p-4 border-2 border-zinc-200 rounded-xl hover:border-emerald-500 hover:bg-emerald-50 transition-all text-left group"
+              >
+                <div className="flex items-center gap-3 mb-1">
+                  <MapPin className="w-5 h-5 text-zinc-400 group-hover:text-emerald-500" />
+                  <h4 className="font-bold text-zinc-900 group-hover:text-emerald-700">Visitante</h4>
+                </div>
+                <p className="text-sm text-zinc-500 pl-8">
+                  Jogo fora de casa. Times visitantes não pagam mensalidade.
+                </p>
+              </button>
+
+              <button
+                onClick={() => handleAvailabilitySelection('home')}
+                className="w-full p-4 border-2 border-zinc-200 rounded-xl hover:border-emerald-500 hover:bg-emerald-50 transition-all text-left group"
+              >
+                <div className="flex items-center gap-3 mb-1">
+                  <Shield className="w-5 h-5 text-zinc-400 group-hover:text-emerald-500" />
+                  <h4 className="font-bold text-zinc-900 group-hover:text-emerald-700">Mandante</h4>
+                </div>
+                <p className="text-sm text-zinc-500 pl-8">
+                  Tenho campo para jogar. Ganhe 2 meses de isenção na assinatura!
+                </p>
               </button>
             </div>
           </div>

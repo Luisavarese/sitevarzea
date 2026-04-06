@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { collection, getDocs, doc, getDoc } from 'firebase/firestore';
 import { db } from '../firebase';
-import { Trophy, MapPin, Map as MapIcon, Globe, Search, Calendar, Gift } from 'lucide-react';
+import { Trophy, MapPin, Map as MapIcon, Globe, Search, Calendar, Gift, Info } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { useAuth } from '../contexts/AuthContext';
 import { startOfWeek, format } from 'date-fns';
@@ -117,7 +117,9 @@ export default function Ranking() {
           getDoc(doc(db, 'settings', 'ranking'))
         ]);
         
-        const teamsData = teamsSnap.docs.map(d => ({ id: d.id, ...d.data() } as Team));
+        const teamsData = teamsSnap.docs
+          .map(d => ({ id: d.id, ...d.data() } as Team & { deleted?: boolean }))
+          .filter(t => !t.deleted);
         setTeams(teamsData);
 
         // Only include friendly matches (not festivals)
@@ -191,8 +193,8 @@ export default function Ranking() {
 
     // Sort matches by date ascending
     const sortedMatches = [...matches].sort((a, b) => {
-      const timeA = a.date && !isNaN(new Date(a.date).getTime()) ? new Date(a.date).getTime() : 0;
-      const timeB = b.date && !isNaN(new Date(b.date).getTime()) ? new Date(b.date).getTime() : 0;
+      const timeA = a.date && !isNaN(new Date(a.date + 'T12:00:00Z').getTime()) ? new Date(a.date + 'T12:00:00Z').getTime() : 0;
+      const timeB = b.date && !isNaN(new Date(b.date + 'T12:00:00Z').getTime()) ? new Date(b.date + 'T12:00:00Z').getTime() : 0;
       return timeA - timeB;
     });
 
@@ -432,6 +434,12 @@ export default function Ranking() {
           Ranking
         </h1>
         <p className="text-zinc-500 mt-2">Acompanhe a classificação dos times no Brasil, no seu Estado e na sua Cidade.</p>
+        <div className="mt-4 bg-blue-50 text-blue-700 p-3 rounded-lg text-sm flex items-start gap-2 border border-blue-100">
+          <Info className="w-5 h-5 flex-shrink-0 mt-0.5 text-blue-500" />
+          <p>
+            <strong>Atenção:</strong> Para garantir uma competição justa, <strong>apenas 1 jogo por semana (de Segunda a Domingo)</strong> é contabilizado para a pontuação do Ranking. Se o seu time jogar mais de uma vez na mesma semana, apenas o primeiro jogo concluído e confirmado irá gerar pontos.
+          </p>
+        </div>
       </header>
 
       {rankingConfig && (rankingConfig.startDate || rankingConfig.endDate || Object.values(rankingConfig.prizes).some(p => p)) && (
@@ -447,9 +455,9 @@ export default function Ranking() {
                   <div className="flex items-center gap-2 text-emerald-100">
                     <Calendar className="w-4 h-4" />
                     <span>
-                      {rankingConfig.startDate ? new Date(rankingConfig.startDate).toLocaleDateString('pt-BR') : '...'} 
+                      {rankingConfig.startDate ? new Date(rankingConfig.startDate + 'T12:00:00Z').toLocaleDateString('pt-BR') : '...'} 
                       {' '}até{' '} 
-                      {rankingConfig.endDate ? new Date(rankingConfig.endDate).toLocaleDateString('pt-BR') : '...'}
+                      {rankingConfig.endDate ? new Date(rankingConfig.endDate + 'T12:00:00Z').toLocaleDateString('pt-BR') : '...'}
                     </span>
                   </div>
                 )}
