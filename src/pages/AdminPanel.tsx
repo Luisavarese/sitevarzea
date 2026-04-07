@@ -256,7 +256,13 @@ export function AdminPanel() {
             }
           }
 
-          const weekStart = startOfWeek(new Date(match.date + 'T12:00:00Z'), { weekStartsOn: 1 });
+          const matchDateObj = new Date(match.date.includes('T') ? match.date : match.date + 'T12:00:00Z');
+          if (isNaN(matchDateObj.getTime())) {
+            match.rankingStatus = 'descartado';
+            return;
+          }
+
+          const weekStart = startOfWeek(matchDateObj, { weekStartsOn: 1 });
           const weekKey = format(weekStart, 'yyyy-MM-dd');
           
           if (!teamWeeksPlayed.has(match.homeTeamId)) teamWeeksPlayed.set(match.homeTeamId, new Set());
@@ -696,9 +702,11 @@ export function AdminPanel() {
     let formattedDateMatch = false;
     if (match.date) {
       try {
-        const dateObj = new Date(match.date + 'T12:00:00Z');
-        const formatted = format(dateObj, "dd/MM/yyyy", { locale: ptBR });
-        formattedDateMatch = formatted.includes(searchLower);
+        const dateObj = new Date(match.date.includes('T') ? match.date : match.date + 'T12:00:00Z');
+        if (!isNaN(dateObj.getTime())) {
+          const formatted = format(dateObj, "dd/MM/yyyy", { locale: ptBR });
+          formattedDateMatch = formatted.includes(searchLower);
+        }
       } catch (e) {
         // ignore
       }

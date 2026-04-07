@@ -230,7 +230,9 @@ export function MyField() {
       for (const team of targetTeams) {
         if (!team.managerId) continue;
         
-        const messageBody = `Promoção! ${field.name} tem um horário vago dia ${format(new Date(promoForm.date + 'T12:00:00Z'), 'dd/MM/yyyy')} às ${promoForm.time} com ${promoForm.discount}% de desconto! Reserve agora pelo app.`;
+        const promoDateObj = new Date(promoForm.date.includes('T') ? promoForm.date : promoForm.date + 'T12:00:00Z');
+        const formattedDate = isNaN(promoDateObj.getTime()) ? promoForm.date : format(promoDateObj, 'dd/MM/yyyy');
+        const messageBody = `Promoção! ${field.name} tem um horário vago dia ${formattedDate} às ${promoForm.time} com ${promoForm.discount}% de desconto! Reserve agora pelo app.`;
         
         // WhatsApp/SMS notification
         if (team.whatsapp) {
@@ -292,7 +294,8 @@ export function MyField() {
     const todayRevenue = todayReservations.reduce((acc, r) => acc + r.value, 0);
     
     const monthReservations = reservations.filter(r => {
-      const rDate = new Date(r.date + 'T12:00:00Z');
+      const rDate = new Date(r.date.includes('T') ? r.date : r.date + 'T12:00:00Z');
+      if (isNaN(rDate.getTime())) return false;
       return rDate >= startOfMonth(today) && rDate <= endOfMonth(today) && r.status !== 'cancelled';
     });
     const monthRevenue = monthReservations.reduce((acc, r) => acc + r.value, 0);

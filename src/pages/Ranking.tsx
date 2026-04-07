@@ -193,8 +193,10 @@ export default function Ranking() {
 
     // Sort matches by date ascending
     const sortedMatches = [...matches].sort((a, b) => {
-      const timeA = a.date && !isNaN(new Date(a.date + 'T12:00:00Z').getTime()) ? new Date(a.date + 'T12:00:00Z').getTime() : 0;
-      const timeB = b.date && !isNaN(new Date(b.date + 'T12:00:00Z').getTime()) ? new Date(b.date + 'T12:00:00Z').getTime() : 0;
+      const dateA = a.date ? (a.date.includes('T') ? a.date : a.date + 'T12:00:00Z') : '';
+      const dateB = b.date ? (b.date.includes('T') ? b.date : b.date + 'T12:00:00Z') : '';
+      const timeA = dateA && !isNaN(new Date(dateA).getTime()) ? new Date(dateA).getTime() : 0;
+      const timeB = dateB && !isNaN(new Date(dateB).getTime()) ? new Date(dateB).getTime() : 0;
       return timeA - timeB;
     });
 
@@ -213,7 +215,10 @@ export default function Ranking() {
 
       if (!homeStats || !awayStats) return;
 
-      const weekStart = startOfWeek(new Date(match.date + 'T12:00:00Z'), { weekStartsOn: 1 });
+      const matchDateObj = new Date(match.date.includes('T') ? match.date : match.date + 'T12:00:00Z');
+      if (isNaN(matchDateObj.getTime())) return;
+
+      const weekStart = startOfWeek(matchDateObj, { weekStartsOn: 1 });
       const weekKey = format(weekStart, 'yyyy-MM-dd');
       
       const homePlayedThisWeek = teamWeeksPlayed.get(match.homeTeamId)!.has(weekKey);
@@ -455,9 +460,9 @@ export default function Ranking() {
                   <div className="flex items-center gap-2 text-emerald-100">
                     <Calendar className="w-4 h-4" />
                     <span>
-                      {rankingConfig.startDate ? new Date(rankingConfig.startDate + 'T12:00:00Z').toLocaleDateString('pt-BR') : '...'} 
+                      {rankingConfig.startDate ? new Date(rankingConfig.startDate.includes('T') ? rankingConfig.startDate : rankingConfig.startDate + 'T12:00:00Z').toLocaleDateString('pt-BR') : '...'} 
                       {' '}até{' '} 
-                      {rankingConfig.endDate ? new Date(rankingConfig.endDate + 'T12:00:00Z').toLocaleDateString('pt-BR') : '...'}
+                      {rankingConfig.endDate ? new Date(rankingConfig.endDate.includes('T') ? rankingConfig.endDate : rankingConfig.endDate + 'T12:00:00Z').toLocaleDateString('pt-BR') : '...'}
                     </span>
                   </div>
                 )}

@@ -74,9 +74,14 @@ async function checkAndNotifyUnlockedMatches() {
       const match = doc.data();
       if (!match.date || match.resultNotificationSent) continue;
 
+      const matchDateObj = new Date(match.date.includes('T') ? match.date : match.date + 'T12:00:00Z');
+      if (isNaN(matchDateObj.getTime())) {
+        continue;
+      }
+
       // Parse match date in Sao Paulo timezone
-      const matchDateZoned = toZonedTime(new Date(match.date), timeZone);
-      let endTimeZoned = toZonedTime(new Date(match.date), timeZone);
+      const matchDateZoned = toZonedTime(matchDateObj, timeZone);
+      let endTimeZoned = toZonedTime(matchDateObj, timeZone);
       
       if (match.endTime) {
         const [hours, minutes] = match.endTime.split(':');
