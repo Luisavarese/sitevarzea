@@ -971,39 +971,42 @@ export function Calendar() {
 
   const handleUpdateMatchStatus = async (matchId: string, newStatus: 'confirmed' | 'cancelled') => {
     try {
-      await updateDoc(doc(db, 'matches', matchId), { status: newStatus });
+      const match = myMatches.find(m => m.id === matchId);
+      if (!match) return;
+
+      const collectionName = match.isFestival ? 'festivalGames' : 'matches';
+      await updateDoc(doc(db, collectionName, matchId), { status: newStatus });
       
       let updatedMatches = myMatches.map(m => m.id === matchId ? { ...m, status: newStatus } : m);
 
-      const match = myMatches.find(m => m.id === matchId);
-      if (match) {
-        const opponentTeamId = match.homeTeamId === myTeamId ? match.awayTeamId : match.homeTeamId;
+      const opponentTeamId = match.homeTeamId === myTeamId ? match.awayTeamId : match.homeTeamId;
+      
+      // Fetch opponent team to get managerId
+      const opponentTeamSnap = await getDoc(doc(db, 'teams', opponentTeamId));
+      if (opponentTeamSnap.exists()) {
+        const opponentTeamData = opponentTeamSnap.data();
+        const opponentManagerId = opponentTeamData.managerId;
+        const matchDateObj = new Date(match.date ? (match.date.includes('T') ? match.date : match.date + 'T12:00:00Z') : new Date());
+        const matchDateStr = isNaN(matchDateObj.getTime()) ? (match.date || '') : format(matchDateObj, "dd/MM/yyyy 'às' HH:mm");
         
-        // Fetch opponent team to get managerId
-        const opponentTeamSnap = await getDoc(doc(db, 'teams', opponentTeamId));
-        if (opponentTeamSnap.exists()) {
-          const opponentTeamData = opponentTeamSnap.data();
-          const opponentManagerId = opponentTeamData.managerId;
-          const matchDateStr = format(new Date(match.date), "dd/MM/yyyy 'às' HH:mm");
-          
-          await sendNotification({
-            userId: opponentManagerId,
-            title: newStatus === 'confirmed' ? 'Jogo Confirmado!' : 'Jogo Recusado/Cancelado',
-            message: `O time ${myTeam?.name} ${newStatus === 'confirmed' ? 'aceitou' : 'recusou/cancelou'} o jogo do dia ${matchDateStr}.`,
-            link: '/calendar',
-            type: newStatus === 'confirmed' ? 'success' : 'error',
-            userPhone: opponentTeamData.whatsapp
-          });
-        }
+        await sendNotification({
+          userId: opponentManagerId,
+          title: newStatus === 'confirmed' ? 'Jogo Confirmado!' : 'Jogo Recusado/Cancelado',
+          message: `O time ${myTeam?.name} ${newStatus === 'confirmed' ? 'aceitou' : 'recusou/cancelou'} o jogo do dia ${matchDateStr}.`,
+          link: '/calendar',
+          type: newStatus === 'confirmed' ? 'success' : 'error',
+          userPhone: opponentTeamData.whatsapp
+        });
       }
 
       if (newStatus === 'confirmed') {
         const confirmedMatch = myMatches.find(m => m.id === matchId);
         if (confirmedMatch) {
-          if (!confirmedMatch.date || isNaN(new Date(confirmedMatch.date).getTime())) {
+          const matchDateObj = new Date(confirmedMatch.date ? (confirmedMatch.date.includes('T') ? confirmedMatch.date : confirmedMatch.date + 'T12:00:00Z') : new Date());
+          if (!confirmedMatch.date || isNaN(matchDateObj.getTime())) {
             throw new Error("Data do jogo inválida");
           }
-          const matchDateStr = format(new Date(confirmedMatch.date), 'yyyy-MM-dd');
+          const matchDateStr = format(matchDateObj, 'yyyy-MM-dd');
           
           // Find other pending matches for the same date for both teams in the database
           const matchesRef = collection(db, 'matches');
@@ -1014,8 +1017,9 @@ export function Calendar() {
             const data = doc.data();
             if (doc.id === matchId || data.status !== 'pending') return false;
             
-            if (!data.date || isNaN(new Date(data.date).getTime())) return false;
-            const isSameDate = format(new Date(data.date), 'yyyy-MM-dd') === matchDateStr;
+            const dataDateObj = new Date(data.date ? (data.date.includes('T') ? data.date : data.date + 'T12:00:00Z') : new Date());
+            if (!data.date || isNaN(dataDateObj.getTime())) return false;
+            const isSameDate = format(dataDateObj, 'yyyy-MM-dd') === matchDateStr;
             const involvesHomeTeam = data.homeTeamId === confirmedMatch.homeTeamId || data.awayTeamId === confirmedMatch.homeTeamId;
             const involvesAwayTeam = data.homeTeamId === confirmedMatch.awayTeamId || data.awayTeamId === confirmedMatch.awayTeamId;
             
