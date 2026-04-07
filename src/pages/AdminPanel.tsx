@@ -40,6 +40,8 @@ interface Team {
   gameType: string;
   logoUrl?: string;
   hasAvailability?: boolean;
+  isHome?: boolean;
+  isAway?: boolean;
 }
 
 interface Match {
@@ -196,14 +198,19 @@ export function AdminPanel() {
 
         const availabilities = availabilitiesSnap.docs.map(d => d.data());
         const teamsWithAvailSet = new Set(availabilities.map(a => a.teamId));
+        
+        const homeTeamsSet = new Set(availabilities.filter(a => a.type === 'home' || a.type === 'both').map(a => a.teamId));
+        const awayTeamsSet = new Set(availabilities.filter(a => a.type === 'away' || a.type === 'both').map(a => a.teamId));
 
         const teams = teamsSnap.docs
           .filter(d => !d.data().deleted)
           .map(d => ({ 
             id: d.id, 
             ...d.data(),
-            hasAvailability: teamsWithAvailSet.has(d.id)
-          } as Team));
+            hasAvailability: teamsWithAvailSet.has(d.id),
+            isHome: homeTeamsSet.has(d.id),
+            isAway: awayTeamsSet.has(d.id)
+          } as Team & { isHome: boolean, isAway: boolean }));
         const regularMatches = matchesSnap.docs.map(d => ({ id: d.id, collectionName: 'matches', ...d.data() } as Match));
         const festivalMatches = festivalSnap.docs.map(d => ({ id: d.id, collectionName: 'festivalGames', ...d.data() } as Match));
         
@@ -291,11 +298,14 @@ export function AdminPanel() {
         const todayStr = now.toISOString().split('T')[0];
         const matchesToday = combinedMatches.filter(m => m.date && m.date.startsWith(todayStr)).length;
 
+        const activeHomeTeams = teams.filter(t => t.isHome).length;
+        const activeAwayTeams = teams.filter(t => t.isAway).length;
+
         setMetrics({
           totalTeams: teams.length,
           activeTeams: teams.length,
-          activeHomeTeams: 0,
-          activeAwayTeams: 0,
+          activeHomeTeams,
+          activeAwayTeams,
           inactiveTeams: 0,
           teamsWithoutAvailability,
           totalMatches: combinedMatches.length,
@@ -727,7 +737,7 @@ export function AdminPanel() {
       </header>
 
       {/* Indicadores Operacionais */}
-      <section className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+      <section className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
         <div 
           onClick={() => openTeamsModal('Todos os Times', () => true)}
           className="bg-white p-4 rounded-xl border border-zinc-200 shadow-sm flex flex-col justify-between cursor-pointer hover:border-emerald-500 transition-colors"
@@ -737,6 +747,28 @@ export function AdminPanel() {
             <span className="text-xs font-medium uppercase tracking-wider">Times Cadastrados</span>
           </div>
           <div className="text-3xl font-bold text-zinc-900">{metrics.totalTeams}</div>
+        </div>
+
+        <div 
+          onClick={() => openTeamsModal('Mandantes', t => t.isHome)}
+          className="bg-white p-4 rounded-xl border border-zinc-200 shadow-sm flex flex-col justify-between cursor-pointer hover:border-emerald-500 transition-colors"
+        >
+          <div className="flex items-center gap-2 text-zinc-500 mb-2">
+            <Shield className="w-4 h-4" />
+            <span className="text-xs font-medium uppercase tracking-wider">Mandantes</span>
+          </div>
+          <div className="text-3xl font-bold text-zinc-900">{metrics.activeHomeTeams}</div>
+        </div>
+
+        <div 
+          onClick={() => openTeamsModal('Visitantes', t => t.isAway)}
+          className="bg-white p-4 rounded-xl border border-zinc-200 shadow-sm flex flex-col justify-between cursor-pointer hover:border-emerald-500 transition-colors"
+        >
+          <div className="flex items-center gap-2 text-zinc-500 mb-2">
+            <Activity className="w-4 h-4" />
+            <span className="text-xs font-medium uppercase tracking-wider">Visitantes</span>
+          </div>
+          <div className="text-3xl font-bold text-zinc-900">{metrics.activeAwayTeams}</div>
         </div>
         
         <div 

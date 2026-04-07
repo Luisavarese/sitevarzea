@@ -4,11 +4,9 @@ import path from "path";
 import cors from "cors";
 import { fileURLToPath } from "url";
 import { dirname } from "path";
-import { MercadoPagoConfig, Preference, Payment } from "mercadopago";
 import { initializeApp, getApps, getApp, cert } from "firebase-admin/app";
 import { getFirestore, Firestore } from "firebase-admin/firestore";
 import fs from "fs";
-import crypto from "crypto";
 import "dotenv/config";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -23,11 +21,13 @@ try {
     
     let appOptions: any = { projectId: config.projectId };
     
+    let hasCredentials = false;
     const serviceAccountPath = path.join(process.cwd(), "service-account.json");
     if (process.env.FIREBASE_SERVICE_ACCOUNT) {
       try {
         const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
         appOptions.credential = cert(serviceAccount);
+        hasCredentials = true;
         console.log("Firebase Admin initialized with Service Account credentials.");
       } catch (err) {
         console.error("Error parsing FIREBASE_SERVICE_ACCOUNT:", err);
@@ -36,6 +36,7 @@ try {
       try {
         const serviceAccount = JSON.parse(fs.readFileSync(serviceAccountPath, "utf8"));
         appOptions.credential = cert(serviceAccount);
+        hasCredentials = true;
         console.log("Firebase Admin initialized with service-account.json file.");
       } catch (err) {
         console.error("Error parsing service-account.json:", err);
@@ -44,50 +45,26 @@ try {
       console.warn("WARNING: FIREBASE_SERVICE_ACCOUNT not found in .env. Webhooks may fail to update Firestore due to lack of permissions.");
     }
 
-    const app = getApps().length === 0 ? initializeApp(appOptions) : getApp();
-    db = getFirestore(app, config.firestoreDatabaseId);
+    if (hasCredentials) {
+      const app = getApps().length === 0 ? initializeApp(appOptions) : getApp();
+      db = getFirestore(app, config.firestoreDatabaseId);
+    }
   } else {
-    const app = getApps().length === 0 ? initializeApp() : getApp();
-    db = getFirestore(app);
+    // We don't initialize without credentials to avoid UNAUTHENTICATED errors
+    console.warn("WARNING: firebase-applet-config.json not found.");
   }
 } catch (e) {
   console.error("Failed to initialize Firebase Admin:", e);
 }
 
-function verifySignature(req: express.Request, secret: string): boolean {
-  const xSignature = req.headers["x-signature"] as string;
-  const xRequestId = req.headers["x-request-id"] as string;
 
-  if (!xSignature || !xRequestId) return false;
-
-  const parts = xSignature.split(",");
-  let ts = "";
-  let v1 = "";
-
-  for (const part of parts) {
-    const [key, value] = part.split("=");
-    if (key === "ts") ts = value;
-    if (key === "v1") v1 = value;
-  }
-
-  if (!ts || !v1) return false;
-
-  const dataId = req.body?.data?.id || req.query?.["data.id"] || req.query?.id;
-  if (!dataId) return false;
-
-  const manifest = `id:${dataId};request-id:${xRequestId};ts:${ts};`;
-
-  const hmac = crypto.createHmac("sha256", secret);
-  hmac.update(manifest);
-  const generatedSignature = hmac.digest("hex");
-
-  return generatedSignature === v1;
-}
 
 import { toZonedTime, fromZonedTime } from 'date-fns-tz';
 
+let isDbAuthenticated = true;
+
 async function checkAndNotifyUnlockedMatches() {
-  if (!db) return;
+  if (!db || !isDbAuthenticated) return;
   try {
     const matchesSnapshot = await db.collection('matches').where('status', '==', 'confirmed').get();
     const now = new Date();
@@ -148,8 +125,14 @@ async function checkAndNotifyUnlockedMatches() {
         await doc.ref.update({ resultNotificationSent: true });
       }
     }
-  } catch (error) {
-    console.error("Error checking unlocked matches:", error);
+  } catch (error: any) {
+    if (error.code === 16 || (error.message && error.message.includes('UNAUTHENTICATED'))) {
+      console.error("Firebase Admin Error: The service account credentials are invalid or have been revoked. Background jobs are disabled.");
+      console.error("To fix this, generate a new private key in the Firebase Console (Project Settings > Service Accounts) and set it in the FIREBASE_SERVICE_ACCOUNT environment variable.");
+      isDbAuthenticated = false;
+    } else {
+      console.error("Error checking unlocked matches:", error);
+    }
   }
 }
 
@@ -263,209 +246,6 @@ async function startServer() {
     } catch (error) {
       console.error("Error sending WhatsApp:", error);
       res.status(500).json({ error: "Erro interno ao tentar enviar WhatsApp." });
-    }
-  });
-
-  app.post("/api/create-preference", async (req, res) => {
-    try {
-      const accessToken = process.env.MP_ACCESS_TOKEN;
-      if (!accessToken) {
-        return res.status(500).json({ error: "Mercado Pago Access Token not configured" });
-      }
-
-      const client = new MercadoPagoConfig({ accessToken, options: { timeout: 5000 } });
-      const preference = new Preference(client);
-
-      const { title, price, quantity, teamId, planType } = req.body;
-
-      const appUrl = process.env.APP_URL || `http://localhost:${PORT}`;
-
-      const response = await preference.create({
-        body: {
-          items: [
-            {
-              id: planType,
-              title: title,
-              quantity: quantity || 1,
-              unit_price: price,
-              currency_id: "BRL",
-            },
-          ],
-          external_reference: teamId,
-          back_urls: {
-            success: `${appUrl}/subscription?status=success`,
-            failure: `${appUrl}/subscription?status=failure`,
-            pending: `${appUrl}/subscription?status=pending`,
-          },
-          auto_return: "approved",
-          notification_url: `${appUrl}/api/webhook`,
-        },
-      });
-
-      res.json({ id: response.id, init_point: response.init_point });
-    } catch (error) {
-      console.error("Error creating preference:", error);
-      res.status(500).json({ error: "Failed to create preference" });
-    }
-  });
-
-  app.post("/api/process-payment", async (req, res) => {
-    try {
-      const accessToken = process.env.MP_ACCESS_TOKEN;
-      if (!accessToken) {
-        return res.status(500).json({ error: "Mercado Pago Access Token not configured" });
-      }
-
-      const client = new MercadoPagoConfig({ accessToken, options: { timeout: 5000 } });
-      const paymentClient = new Payment(client);
-
-      const { formData, teamId, planType } = req.body;
-
-      const paymentData = {
-        body: {
-          transaction_amount: formData.transaction_amount,
-          token: formData.token,
-          description: formData.description || "Assinatura Premium",
-          installments: formData.installments,
-          payment_method_id: formData.payment_method_id,
-          issuer_id: formData.issuer_id,
-          payer: {
-            email: formData.payer.email,
-            identification: formData.payer.identification
-          },
-          external_reference: teamId,
-          additional_info: {
-            items: [
-              {
-                id: planType,
-                title: "Assinatura Premium",
-                quantity: 1,
-                unit_price: formData.transaction_amount,
-              }
-            ]
-          },
-          notification_url: `${process.env.APP_URL || `http://localhost:${PORT}`}/api/webhook`
-        }
-      };
-
-      console.log("Creating payment with data:", JSON.stringify(paymentData, null, 2));
-
-      const response = await paymentClient.create(paymentData);
-      console.log("Payment created successfully:", response.id, response.status);
-      res.json(response);
-    } catch (error) {
-      console.error("Payment processing error:", error);
-      res.status(500).json({ error: "Failed to process payment" });
-    }
-  });
-
-  app.post("/api/webhook", async (req, res) => {
-    try {
-      const secret = process.env.MP_WEBHOOK_SECRET;
-      
-      // Log incoming webhook for debugging
-      console.log("Webhook received! Body:", JSON.stringify(req.body, null, 2));
-      console.log("Webhook headers:", JSON.stringify(req.headers, null, 2));
-      console.log("Webhook query:", JSON.stringify(req.query, null, 2));
-
-      const logEntry = `[${new Date().toISOString()}] Webhook received: ${JSON.stringify({
-        headers: req.headers,
-        body: req.body,
-        query: req.query
-      })}\n`;
-      fs.appendFileSync(path.join(process.cwd(), "webhook.log"), logEntry);
-
-      // Handle Mercado Pago test ping
-      if (req.body?.action === "test.created" || req.body?.type === "test") {
-        return res.status(200).send("OK");
-      }
-
-      // Verify signature if secret is provided
-      if (secret && req.body?.action !== "test.created" && req.body?.type !== "test") {
-        // In test mode from MP dashboard, signature might be missing or invalid
-        // We log it but don't block if it's a test payload
-        if (req.body?.data?.id === "123456" || req.body?.user_id === 156340914) {
-          console.log("Received test webhook from Mercado Pago dashboard");
-        } else {
-          const isValid = verifySignature(req, secret);
-          if (!isValid) {
-            fs.appendFileSync(path.join(process.cwd(), "webhook.log"), `[${new Date().toISOString()}] Invalid signature\n`);
-            console.warn("Invalid webhook signature");
-            return res.status(403).send("Invalid signature");
-          }
-        }
-      }
-
-      const type = req.body?.type || req.query?.topic || req.query?.type;
-      const dataId = req.body?.data?.id || req.query?.["data.id"] || req.query?.id;
-
-      fs.appendFileSync(path.join(process.cwd(), "webhook.log"), `[${new Date().toISOString()}] Processing type: ${type}, dataId: ${dataId}\n`);
-
-      if (type === "payment" && dataId && dataId !== "123456") {
-        const accessToken = process.env.MP_ACCESS_TOKEN;
-        if (!accessToken) {
-          throw new Error("MP_ACCESS_TOKEN not configured");
-        }
-
-        const client = new MercadoPagoConfig({ accessToken, options: { timeout: 5000 } });
-        const paymentClient = new Payment(client);
-        
-        // Fetch payment details to get the external_reference (teamId) and status
-        const payment = await paymentClient.get({ id: dataId });
-        
-        const teamId = payment.external_reference;
-        const status = payment.status;
-        const planType = payment.additional_info?.items?.[0]?.id || "premium_mensal";
-
-        if (teamId && db) {
-          const teamRef = db.collection("teams").doc(teamId);
-          
-          if (status === "approved") {
-            const startedAt = new Date();
-            const expiresAt = new Date(startedAt);
-            
-            if (planType.includes("anual")) {
-              expiresAt.setFullYear(expiresAt.getFullYear() + 1);
-            } else if (planType.includes("semestral")) {
-              expiresAt.setMonth(expiresAt.getMonth() + 6);
-            } else if (planType.includes("trimestral")) {
-              expiresAt.setMonth(expiresAt.getMonth() + 3);
-            } else {
-              expiresAt.setMonth(expiresAt.getMonth() + 1); // default mensal
-            }
-            
-            await teamRef.set({
-              subscription: {
-                status: "active",
-                plan: planType,
-                startedAt: startedAt.toISOString(),
-                expiresAt: expiresAt.toISOString(),
-              }
-            }, { merge: true });
-            console.log(`Updated subscription for team ${teamId} to active`);
-          } else if (status === "rejected" || status === "cancelled") {
-            await teamRef.set({
-              subscription: {
-                status: "inactive",
-              }
-            }, { merge: true });
-            console.log(`Updated subscription for team ${teamId} to inactive`);
-          } else if (status === "pending" || status === "in_process") {
-            await teamRef.set({
-              subscription: {
-                status: "pending",
-                plan: planType,
-              }
-            }, { merge: true });
-            console.log(`Updated subscription for team ${teamId} to pending`);
-          }
-        }
-      }
-
-      res.status(200).send("OK");
-    } catch (error) {
-      console.error("Webhook error:", error);
-      res.status(500).send("Internal Server Error");
     }
   });
 

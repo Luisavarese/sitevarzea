@@ -45,7 +45,6 @@ interface Reservation {
   duration: number; // in hours
   value: number;
   status: 'pending' | 'confirmed' | 'cancelled' | 'paid';
-  paymentMethod?: 'pix' | 'money' | 'card';
   managerId: string;
   createdAt: string;
 }
@@ -679,8 +678,6 @@ export function MyField() {
                     <th className="px-4 py-3 font-medium">Quadra</th>
                     <th className="px-4 py-3 font-medium">Time/Cliente</th>
                     <th className="px-4 py-3 font-medium">Status</th>
-                    <th className="px-4 py-3 font-medium">Pagamento</th>
-                    <th className="px-4 py-3 font-medium">Valor</th>
                     <th className="px-4 py-3 font-medium text-right">Ações</th>
                   </tr>
                 </thead>
@@ -716,23 +713,6 @@ export function MyField() {
                               <option value="paid">Pago</option>
                               <option value="cancelled">Cancelado</option>
                             </select>
-                          </td>
-                          <td className="px-4 py-3">
-                            <select 
-                              value={res.paymentMethod || ''}
-                              onChange={async (e) => {
-                                await updateDoc(doc(db, 'reservations', res.id), { paymentMethod: e.target.value });
-                              }}
-                              className="text-xs font-medium rounded bg-zinc-100 text-zinc-700 px-2 py-1 border-0 cursor-pointer outline-none"
-                            >
-                              <option value="">Não definido</option>
-                              <option value="pix">PIX</option>
-                              <option value="money">Dinheiro</option>
-                              <option value="card">Cartão</option>
-                            </select>
-                          </td>
-                          <td className="px-4 py-3 font-medium text-emerald-600">
-                            {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(res.value)}
                           </td>
                           <td className="px-4 py-3 text-right">
                             <button 
@@ -1152,7 +1132,6 @@ export function MyField() {
               const startTime = formData.get('startTime') as string;
               const endTime = formData.get('endTime') as string;
               const teamName = formData.get('teamName') as string;
-              const paymentMethod = formData.get('paymentMethod') as any;
               
               const valuePerSession = field.pricePerHour * duration;
               const numSessions = type === 'mensal' && !editingReservation ? 4 : 1;
@@ -1167,8 +1146,7 @@ export function MyField() {
                     startTime,
                     endTime,
                     duration,
-                    value: valuePerSession,
-                    paymentMethod
+                    value: valuePerSession
                   });
                 } else {
                   const batch = [];
@@ -1187,7 +1165,6 @@ export function MyField() {
                       duration,
                       value: valuePerSession,
                       status: 'confirmed',
-                      paymentMethod,
                       managerId: user.uid,
                       createdAt: new Date().toISOString()
                     };
@@ -1247,16 +1224,6 @@ export function MyField() {
                   <label className="block text-sm font-medium text-zinc-700 mb-1">Hora Fim</label>
                   <input type="time" name="endTime" defaultValue={editingReservation?.endTime} required className="w-full px-3 py-2 border border-zinc-300 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none" />
                 </div>
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-zinc-700 mb-1">Forma de Pagamento</label>
-                <select name="paymentMethod" defaultValue={editingReservation?.paymentMethod || ''} className="w-full px-3 py-2 border border-zinc-300 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none">
-                  <option value="">A Combinar</option>
-                  <option value="pix">PIX</option>
-                  <option value="money">Dinheiro</option>
-                  <option value="card">Cartão</option>
-                </select>
               </div>
 
               <div className="flex justify-end gap-3 mt-6">

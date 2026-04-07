@@ -72,8 +72,7 @@ export function TeamProfile() {
   const [isSaving, setIsSaving] = useState(false);
   const [isEditingTeam, setIsEditingTeam] = useState(false);
   const [isAddingPlayer, setIsAddingPlayer] = useState(false);
-  const [activeTab, setActiveTab] = useState<'elenco' | 'financeiro'>('elenco');
-  const [financialMonth, setFinancialMonth] = useState<Date>(new Date());
+  const [activeTab, setActiveTab] = useState<'elenco'>('elenco');
   const [myBadges, setMyBadges] = useState<string[]>([]);
   const [upcomingMatches, setUpcomingMatches] = useState<any[]>([]);
 
@@ -490,31 +489,6 @@ export function TeamProfile() {
     }
   };
 
-  const togglePayment = async (playerId: string, monthKey: string, isPaid: boolean) => {
-    try {
-      const playerRef = doc(db, 'players', playerId);
-      await updateDoc(playerRef, {
-        [`monthlyFees.${monthKey}`]: isPaid
-      });
-      setPlayers(players.map(p => {
-        if (p.id === playerId) {
-          return {
-            ...p,
-            monthlyFees: {
-              ...(p.monthlyFees || {}),
-              [monthKey]: isPaid
-            }
-          };
-        }
-        return p;
-      }));
-      showToast(isPaid ? "Pagamento registrado!" : "Pagamento removido!", "success");
-    } catch (error) {
-      console.error("Error updating payment:", error);
-      showToast("Erro ao atualizar pagamento.", "error");
-    }
-  };
-
   const handleAvailabilitySelection = async (type: 'home' | 'away') => {
     if (!newlyCreatedTeamId) return;
 
@@ -927,12 +901,6 @@ export function TeamProfile() {
           >
             <div className="flex items-center gap-2"><Users className="w-4 h-4"/> Elenco</div>
           </button>
-          <button
-            onClick={() => setActiveTab('financeiro')}
-            className={cn("px-4 py-3 text-sm font-medium border-b-2 transition-colors", activeTab === 'financeiro' ? "border-emerald-500 text-emerald-600" : "border-transparent text-zinc-500 hover:text-zinc-700")}
-          >
-            <div className="flex items-center gap-2"><DollarSign className="w-4 h-4"/> Financeiro</div>
-          </button>
         </div>
       )}
 
@@ -1026,68 +994,6 @@ export function TeamProfile() {
                 </table>
               </div>
             )}
-          </div>
-        </section>
-      )}
-
-      {/* Financeiro Section */}
-      {team && activeTab === 'financeiro' && (
-        <section className="space-y-4 animate-in fade-in duration-300">
-          <div className="flex items-center justify-between bg-white p-4 rounded-2xl border border-zinc-200 shadow-sm">
-            <button onClick={() => setFinancialMonth(subMonths(financialMonth, 1))} className="p-2 hover:bg-zinc-100 rounded-lg transition-colors">
-              <ChevronLeft className="w-5 h-5 text-zinc-600" />
-            </button>
-            <h3 className="text-lg font-bold text-zinc-900 capitalize">
-              {format(financialMonth, 'MMMM yyyy', { locale: ptBR })}
-            </h3>
-            <button onClick={() => setFinancialMonth(addMonths(financialMonth, 1))} className="p-2 hover:bg-zinc-100 rounded-lg transition-colors">
-              <ChevronRight className="w-5 h-5 text-zinc-600" />
-            </button>
-          </div>
-
-          <div className="bg-white rounded-2xl border border-zinc-200 shadow-sm overflow-hidden">
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-sm">
-                <thead className="bg-zinc-50 border-b border-zinc-200 text-zinc-500">
-                  <tr>
-                    <th className="p-4 font-medium">Jogador</th>
-                    <th className="p-4 font-medium text-center">Status</th>
-                    <th className="p-4 font-medium text-right">Ação</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-zinc-100">
-                  {players.map(player => {
-                    const monthKey = format(financialMonth, 'yyyy-MM');
-                    const isPaid = player.monthlyFees?.[monthKey] || false;
-                    return (
-                      <tr key={player.id} className="hover:bg-zinc-50 transition-colors">
-                        <td className="p-4 font-medium text-zinc-900">{player.name}</td>
-                        <td className="p-4 text-center">
-                          <span className={cn("px-3 py-1 rounded-full text-xs font-medium", isPaid ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700")}>
-                            {isPaid ? 'Pago' : 'Pendente'}
-                          </span>
-                        </td>
-                        <td className="p-4 text-right">
-                          <button
-                            onClick={() => togglePayment(player.id, monthKey, !isPaid)}
-                            className={cn("px-4 py-2 rounded-lg text-xs font-medium transition-colors", isPaid ? "bg-zinc-100 text-zinc-600 hover:bg-zinc-200" : "bg-emerald-500 text-white hover:bg-emerald-600")}
-                          >
-                            {isPaid ? 'Desfazer' : 'Marcar como Pago'}
-                          </button>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                  {players.length === 0 && (
-                    <tr>
-                      <td colSpan={3} className="p-8 text-center text-zinc-500">
-                        Nenhum jogador cadastrado no elenco.
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
           </div>
         </section>
       )}
