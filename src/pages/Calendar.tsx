@@ -170,7 +170,7 @@ export function Calendar() {
     if (myTeam && !editingAvailId) {
       setAvailForm(prev => ({
         ...prev,
-        type: myTeam.subscription?.plan?.includes('visitante') ? 'away' : 'home'
+        type: 'home'
       }));
     }
   }, [myTeam, editingAvailId]);
@@ -229,7 +229,6 @@ export function Calendar() {
   const [toastMessage, setToastMessage] = useState<{title: string, type: 'success' | 'error'} | null>(null);
 
   const [searchQuery, setSearchQuery] = useState('');
-  const [showSubscriptionModal, setShowSubscriptionModal] = useState(false);
 
   const showToast = (title: string, type: 'success' | 'error') => {
     setToastMessage({ title, type });
@@ -626,19 +625,6 @@ export function Calendar() {
     e.preventDefault();
     if (!myTeamId) return;
 
-    const currentSub = myTeam?.subscription;
-    const isActive = currentSub?.status === 'active' && new Date(currentSub.expiresAt) > new Date();
-
-    if (!isActive) {
-      setShowSubscriptionModal(true);
-      return;
-    }
-
-    if (myTeam?.subscription?.plan === 'visitante_free' && availForm.type === 'home') {
-      showToast("Times visitantes não podem criar disponibilidade como mandante.", "error");
-      return;
-    }
-
     try {
       let finalLat = availForm.lat;
       let finalLng = availForm.lng;
@@ -687,7 +673,7 @@ export function Calendar() {
         setIsAddingAvail(false);
         setAvailForm({
           ...initialAvailForm,
-          type: myTeam?.subscription?.plan?.includes('visitante') ? 'away' : 'home'
+          type: 'home'
         });
         showToast("Disponibilidade atualizada com sucesso!", "success");
       } else {
@@ -716,7 +702,7 @@ export function Calendar() {
         setIsAddingAvail(false);
         setAvailForm({
           ...initialAvailForm,
-          type: myTeam?.subscription?.plan?.includes('visitante') ? 'away' : 'home'
+          type: 'home'
         });
         showToast("Disponibilidade adicionada com sucesso!", "success");
       }
@@ -727,13 +713,6 @@ export function Calendar() {
   };
 
   const handleEditAvailability = (avail: Availability) => {
-    const currentSub = myTeam?.subscription;
-    const isActive = currentSub?.status === 'active' && new Date(currentSub.expiresAt) > new Date();
-    if (!isActive) {
-      setShowSubscriptionModal(true);
-      return;
-    }
-
     setAvailForm({
       dayOfWeek: avail.dayOfWeek,
       startTime: avail.startTime,
@@ -776,14 +755,6 @@ export function Calendar() {
     e.preventDefault();
     if (!myTeamId || !newBlockDate) return;
 
-    const currentSub = myTeam?.subscription;
-    const isActive = currentSub?.status === 'active' && new Date(currentSub.expiresAt) > new Date();
-
-    if (!isActive) {
-      setShowSubscriptionModal(true);
-      return;
-    }
-
     try {
       const newBlock = {
         teamId: myTeamId,
@@ -820,19 +791,6 @@ export function Calendar() {
     }
     if (avail.teamId === myTeamId) {
       showToast("Você não pode agendar um jogo contra seu próprio time.", "error");
-      return;
-    }
-
-    const currentSub = myTeam?.subscription;
-    const isActive = currentSub?.status === 'active' && new Date(currentSub.expiresAt) > new Date();
-
-    if (!isActive) {
-      setShowSubscriptionModal(true);
-      return;
-    }
-
-    if (avail.type === 'away' && myTeam?.subscription?.plan === 'visitante_free') {
-      showToast("Times visitantes não podem convidar outros times visitantes para jogar em casa.", "error");
       return;
     }
 
@@ -1012,16 +970,6 @@ export function Calendar() {
   };
 
   const handleUpdateMatchStatus = async (matchId: string, newStatus: 'confirmed' | 'cancelled') => {
-    if (newStatus === 'confirmed') {
-      const currentSub = myTeam?.subscription;
-      const isActive = currentSub?.status === 'active' && new Date(currentSub.expiresAt) > new Date();
-
-      if (!isActive) {
-        setShowSubscriptionModal(true);
-        return;
-      }
-    }
-
     try {
       await updateDoc(doc(db, 'matches', matchId), { status: newStatus });
       
@@ -1401,16 +1349,9 @@ export function Calendar() {
             {!isAddingAvail && (
               <button 
                 onClick={() => {
-                  const currentSub = myTeam?.subscription;
-                  const isActive = currentSub?.status === 'active' && new Date(currentSub.expiresAt) > new Date();
-                  if (!isActive) {
-                    setShowSubscriptionModal(true);
-                    return;
-                  }
-
                   setAvailForm({
                     ...initialAvailForm,
-                    type: currentSub?.plan?.includes('visitante') ? 'away' : 'home'
+                    type: 'home'
                   });
                   setEditingAvailId(null);
                   setIsAddingAvail(true);
@@ -1436,11 +1377,7 @@ export function Calendar() {
                   <select 
                     value={availForm.type} 
                     onChange={e => setAvailForm({...availForm, type: e.target.value as any})} 
-                    className={cn(
-                      "w-full p-2 text-sm border border-zinc-300 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none",
-                      !myTeam?.subscription?.plan?.startsWith('premium') && "bg-zinc-100"
-                    )}
-                    disabled={!myTeam?.subscription?.plan?.startsWith('premium')}
+                    className="w-full p-2 text-sm border border-zinc-300 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none"
                   >
                     <option value="away">Visitante (Vou jogar fora)</option>
                     <option value="home">Mandante (Tenho campo)</option>
@@ -1495,7 +1432,7 @@ export function Calendar() {
                   setEditingAvailId(null);
                   setAvailForm({
                     ...initialAvailForm,
-                    type: myTeam?.subscription?.plan?.includes('visitante') ? 'away' : 'home'
+                    type: 'home'
                   });
                 }} className="px-3 py-2 text-sm text-zinc-600 hover:bg-zinc-100 rounded-lg font-medium">Cancelar</button>
                 <button type="submit" className="bg-emerald-500 hover:bg-emerald-600 text-white px-4 py-2 text-sm rounded-lg font-medium">Salvar</button>
@@ -2610,38 +2547,6 @@ export function Calendar() {
                 </div>
               );
             })()}
-          </div>
-        </div>
-      )}
-
-      {/* Subscription Modal */}
-      {showSubscriptionModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl p-6 max-w-md w-full shadow-xl">
-            <div className="w-12 h-12 bg-amber-100 rounded-full flex items-center justify-center text-amber-600 mb-4 mx-auto">
-              <AlertCircle className="w-6 h-6" />
-            </div>
-            <h3 className="text-xl font-bold text-center text-zinc-900 mb-2">Assinatura Necessária</h3>
-            <p className="text-zinc-600 text-center mb-6">
-              Para agendar jogos, você precisa ter uma assinatura ativa. Escolha o plano ideal para o seu time.
-            </p>
-            <div className="flex flex-col gap-3">
-              <button 
-                onClick={() => {
-                  setShowSubscriptionModal(false);
-                  navigate('/subscription');
-                }}
-                className="w-full py-3 px-4 bg-[#009c3b] hover:bg-[#009c3b]/90 text-white font-bold rounded-xl transition-colors"
-              >
-                Ver Planos de Assinatura
-              </button>
-              <button 
-                onClick={() => setShowSubscriptionModal(false)}
-                className="w-full py-3 px-4 bg-zinc-100 hover:bg-zinc-200 text-zinc-700 font-medium rounded-xl transition-colors"
-              >
-                Agora não
-              </button>
-            </div>
           </div>
         </div>
       )}

@@ -519,51 +519,10 @@ export function TeamProfile() {
     if (!newlyCreatedTeamId) return;
 
     try {
-      const now = new Date();
-
-      // Update team subscription
-      const teamRef = doc(db, 'teams', newlyCreatedTeamId);
-      
       if (type === 'away') {
-        await updateDoc(teamRef, {
-          subscription: {
-            status: 'active',
-            plan: 'visitante_free',
-            startedAt: now.toISOString(),
-            expiresAt: '2099-12-31T23:59:59.000Z'
-          }
-        });
         showToast("Time criado como Visitante com sucesso!", "success");
       } else {
-        if ((profile as any)?.hasUsedTrial) {
-          // If they already used the trial, they don't get the 2 months free.
-          // They must pay to use the app as Mandante.
-          await updateDoc(teamRef, {
-            subscription: {
-              status: 'pending',
-              plan: 'premium_mensal', // Default to monthly pending
-              startedAt: now.toISOString(),
-              expiresAt: now.toISOString() // Expired immediately
-            }
-          });
-          showToast("Time criado como Mandante! Você precisa assinar um plano para continuar.", "success");
-        } else {
-          const expiresAt = addMonths(now, 2);
-          await updateDoc(teamRef, {
-            subscription: {
-              status: 'active',
-              plan: 'mandante_trial',
-              startedAt: now.toISOString(),
-              expiresAt: expiresAt.toISOString()
-            }
-          });
-          if (user) {
-            await updateDoc(doc(db, 'users', user.uid), {
-              hasUsedTrial: true
-            });
-          }
-          showToast("Time criado como Mandante com 2 meses de isenção!", "success");
-        }
+        showToast("Time criado como Mandante com sucesso!", "success");
       }
 
       setShowAvailabilityModal(false);
@@ -1202,7 +1161,7 @@ export function TeamProfile() {
                   <h4 className="font-bold text-zinc-900 group-hover:text-emerald-700">Visitante</h4>
                 </div>
                 <p className="text-sm text-zinc-500 pl-8">
-                  Jogo fora de casa. Times visitantes não pagam mensalidade.
+                  Jogo fora de casa.
                 </p>
               </button>
 
@@ -1215,7 +1174,7 @@ export function TeamProfile() {
                   <h4 className="font-bold text-zinc-900 group-hover:text-emerald-700">Mandante</h4>
                 </div>
                 <p className="text-sm text-zinc-500 pl-8">
-                  Tenho campo para jogar. Ganhe 2 meses de isenção na assinatura!
+                  Tenho campo para jogar.
                 </p>
               </button>
             </div>

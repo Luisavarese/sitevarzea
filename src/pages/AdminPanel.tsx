@@ -8,23 +8,6 @@ import { format, addMonths, isSameMonth, startOfWeek } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import { ComposedChart, Line, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 
-const isPromoActive = new Date() <= new Date('2026-06-30T23:59:59-03:00');
-
-const planPrices: Record<string, { price: number, months: number }> = {
-  'premium_mensal': { price: isPromoActive ? 20.00 : 40.00, months: 1 },
-  'premium_trimestral': { price: isPromoActive ? 57.45 : 114.90, months: 3 },
-  'premium_semestral': { price: 215.90, months: 6 },
-  'premium_anual': { price: 407.90, months: 12 },
-  'visitante_mensal': { price: 15.00, months: 1 },
-  'visitante_trimestral': { price: 39.90, months: 3 },
-  'visitante_semestral': { price: 69.90, months: 6 },
-  'visitante_anual': { price: 119.90, months: 12 },
-  'mandante_mensal': { price: 30.00, months: 1 },
-  'mandante_trimestral': { price: 79.90, months: 3 },
-  'mandante_semestral': { price: 139.90, months: 6 },
-  'mandante_anual': { price: 239.90, months: 12 },
-};
-
 interface Banner {
   id: string;
   imageUrl: string;
@@ -57,12 +40,6 @@ interface Team {
   gameType: string;
   logoUrl?: string;
   hasAvailability?: boolean;
-  subscription?: {
-    status: string;
-    expiresAt: string;
-    cycleId?: string;
-    plan?: string;
-  };
 }
 
 interface Match {
@@ -119,11 +96,6 @@ export function AdminPanel() {
   const [currentPage, setCurrentPage] = useState(1);
   const [matchSearch, setMatchSearch] = useState('');
   const matchesPerPage = 10;
-
-  // Financial Control
-  const [annualFeeHome, setAnnualFeeHome] = useState(120); // Default R$ 120
-  const [annualFeeAway, setAnnualFeeAway] = useState(120); // Default R$ 120
-  const [financialHistory, setFinancialHistory] = useState<{ month: string, count: number, revenue: number }[]>([]);
 
   // Forms
   const [isAddingBanner, setIsAddingBanner] = useState(false);
@@ -202,8 +174,6 @@ export function AdminPanel() {
 
         if (settingsSnap.exists()) {
           setSiteLogo(settingsSnap.data().logoUrl || null);
-          if (settingsSnap.data().annualFeeHome) setAnnualFeeHome(settingsSnap.data().annualFeeHome);
-          if (settingsSnap.data().annualFeeAway) setAnnualFeeAway(settingsSnap.data().annualFeeAway);
         }
 
         if (rankingSnap.exists()) {
@@ -314,62 +284,19 @@ export function AdminPanel() {
         setAllMatches(combinedMatches);
 
         const now = new Date();
-        const activeTeamsList = teams.filter(t => {
-          const sub = t.subscription;
-          if (!sub || sub.status !== 'active' || !sub.expiresAt) return false;
-          const expiresDate = new Date(sub.expiresAt);
-          return !isNaN(expiresDate.getTime()) && expiresDate > now;
-        });
+        const activeTeamsList = teams; // All teams are active now
         
-        const activeHomeTeams = activeTeamsList.filter(t => t.subscription?.plan?.includes('mandante') || t.subscription?.plan?.includes('premium')).length;
-        const activeAwayTeams = activeTeamsList.filter(t => t.subscription?.plan?.includes('visitante')).length;
         const teamsWithoutAvailability = teams.filter(t => !t.hasAvailability).length;
 
         const todayStr = now.toISOString().split('T')[0];
         const matchesToday = combinedMatches.filter(m => m.date && m.date.startsWith(todayStr)).length;
 
-        const history = [];
-        for (let i = 5; i >= 0; i--) {
-          const targetMonth = addMonths(now, -i);
-          let count = 0;
-          let revenue = 0;
-          
-          teams.forEach(team => {
-            const sub = team.subscription as any;
-            if (sub && sub.status === 'active' && sub.plan && sub.expiresAt) {
-              const planInfo = planPrices[sub.plan];
-              if (planInfo) {
-                const expiresDate = new Date(sub.expiresAt);
-                const startedDate = sub.startedAt ? new Date(sub.startedAt) : addMonths(expiresDate, -planInfo.months);
-                
-                if (!isNaN(expiresDate.getTime()) && !isNaN(startedDate.getTime())) {
-                  let currentPaymentDate = startedDate;
-                  while (currentPaymentDate < expiresDate) {
-                    if (isSameMonth(currentPaymentDate, targetMonth)) {
-                      count++;
-                      revenue += planInfo.price;
-                    }
-                    currentPaymentDate = addMonths(currentPaymentDate, planInfo.months);
-                  }
-                }
-              }
-            }
-          });
-          
-          history.push({
-            month: format(targetMonth, 'MMM/yy', { locale: ptBR }),
-            count,
-            revenue
-          });
-        }
-        setFinancialHistory(history);
-
         setMetrics({
           totalTeams: teams.length,
-          activeTeams: activeTeamsList.length,
-          activeHomeTeams,
-          activeAwayTeams,
-          inactiveTeams: teams.length - activeTeamsList.length,
+          activeTeams: teams.length,
+          activeHomeTeams: 0,
+          activeAwayTeams: 0,
+          inactiveTeams: 0,
           teamsWithoutAvailability,
           totalMatches: combinedMatches.length,
           matchesToday
@@ -698,16 +625,6 @@ export function AdminPanel() {
     }
   };
 
-  const handleSaveFinancialConfig = async () => {
-    try {
-      await setDoc(doc(db, 'settings', 'general'), { annualFeeHome, annualFeeAway }, { merge: true });
-      showToast("Configuração financeira salva!", "success");
-    } catch (error) {
-      console.error("Error saving financial config:", error);
-      showToast("Erro ao salvar configuração.", "error");
-    }
-  };
-
   const handleSaveRankingConfig = async (e: FormEvent) => {
     e.preventDefault();
     setIsSavingRanking(true);
@@ -810,7 +727,7 @@ export function AdminPanel() {
       </header>
 
       {/* Indicadores Operacionais */}
-      <section className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
+      <section className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
         <div 
           onClick={() => openTeamsModal('Todos os Times', () => true)}
           className="bg-white p-4 rounded-xl border border-zinc-200 shadow-sm flex flex-col justify-between cursor-pointer hover:border-emerald-500 transition-colors"
@@ -822,56 +739,6 @@ export function AdminPanel() {
           <div className="text-3xl font-bold text-zinc-900">{metrics.totalTeams}</div>
         </div>
         
-        <div 
-          onClick={() => openTeamsModal('Times Ativos (Mandantes)', t => {
-            if (!t.subscription || t.subscription.status !== 'active' || !t.subscription.expiresAt) return false;
-            if (!t.subscription.plan?.includes('mandante') && !t.subscription.plan?.includes('premium')) return false;
-            const expiresDate = new Date(t.subscription.expiresAt);
-            return !isNaN(expiresDate.getTime()) && expiresDate > new Date();
-          })}
-          className="bg-white p-4 rounded-xl border border-emerald-200 shadow-sm flex flex-col justify-between relative overflow-hidden cursor-pointer hover:border-emerald-500 transition-colors"
-        >
-          <div className="absolute top-0 right-0 w-16 h-16 bg-emerald-50 rounded-bl-full -z-10"></div>
-          <div className="flex items-center gap-2 text-emerald-600 mb-2">
-            <Check className="w-4 h-4" />
-            <span className="text-xs font-medium uppercase tracking-wider">Mandantes Ativos</span>
-          </div>
-          <div className="text-3xl font-bold text-emerald-600">{metrics.activeHomeTeams}</div>
-        </div>
-
-        <div 
-          onClick={() => openTeamsModal('Times Ativos (Visitantes)', t => {
-            if (!t.subscription || t.subscription.status !== 'active' || !t.subscription.expiresAt) return false;
-            if (!t.subscription.plan?.includes('visitante')) return false;
-            const expiresDate = new Date(t.subscription.expiresAt);
-            return !isNaN(expiresDate.getTime()) && expiresDate > new Date();
-          })}
-          className="bg-white p-4 rounded-xl border border-emerald-200 shadow-sm flex flex-col justify-between relative overflow-hidden cursor-pointer hover:border-emerald-500 transition-colors"
-        >
-          <div className="absolute top-0 right-0 w-16 h-16 bg-emerald-50 rounded-bl-full -z-10"></div>
-          <div className="flex items-center gap-2 text-emerald-600 mb-2">
-            <Check className="w-4 h-4" />
-            <span className="text-xs font-medium uppercase tracking-wider">Visitantes Ativos</span>
-          </div>
-          <div className="text-3xl font-bold text-emerald-600">{metrics.activeAwayTeams}</div>
-        </div>
-
-        <div 
-          onClick={() => openTeamsModal('Times Inativos', t => {
-            if (!t.subscription || t.subscription.status !== 'active' || !t.subscription.expiresAt) return true;
-            const expiresDate = new Date(t.subscription.expiresAt);
-            return isNaN(expiresDate.getTime()) || expiresDate <= new Date();
-          })}
-          className="bg-white p-4 rounded-xl border border-red-200 shadow-sm flex flex-col justify-between relative overflow-hidden cursor-pointer hover:border-red-500 transition-colors"
-        >
-          <div className="absolute top-0 right-0 w-16 h-16 bg-red-50 rounded-bl-full -z-10"></div>
-          <div className="flex items-center gap-2 text-red-500 mb-2">
-            <X className="w-4 h-4" />
-            <span className="text-xs font-medium uppercase tracking-wider">Times Inativos</span>
-          </div>
-          <div className="text-3xl font-bold text-red-500">{metrics.inactiveTeams}</div>
-        </div>
-
         <div 
           onClick={() => openTeamsModal('Sem Disponibilidade', t => !t.hasAvailability)}
           className="bg-white p-4 rounded-xl border border-orange-200 shadow-sm flex flex-col justify-between relative overflow-hidden cursor-pointer hover:border-orange-500 transition-colors"
@@ -902,81 +769,6 @@ export function AdminPanel() {
           </div>
           <div className="text-3xl font-bold text-zinc-900">{metrics.matchesToday}</div>
           <div className="text-xs text-zinc-400 mt-1">Total: {metrics.totalMatches} jogos</div>
-        </div>
-      </section>
-
-      {/* Controle Financeiro */}
-      <section className="bg-white p-6 rounded-2xl border border-zinc-200 shadow-sm">
-        <h2 className="text-xl font-semibold flex items-center gap-2 text-zinc-800 mb-6">
-          <DollarSign className="w-5 h-5 text-emerald-500" />
-          Controle Financeiro (Projeção 12 Meses)
-        </h2>
-        
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
-          <div className="bg-zinc-50 p-4 rounded-xl border border-zinc-200">
-            <div className="text-sm font-medium text-zinc-500 mb-1">Taxa Anual (Mandante)</div>
-            <div className="flex items-center gap-2">
-              <span className="text-zinc-400 font-medium">R$</span>
-              <input 
-                type="number" 
-                value={annualFeeHome} 
-                onChange={e => setAnnualFeeHome(Number(e.target.value))}
-                className="w-full bg-transparent text-2xl font-bold text-zinc-900 outline-none"
-              />
-            </div>
-          </div>
-          <div className="bg-zinc-50 p-4 rounded-xl border border-zinc-200">
-            <div className="text-sm font-medium text-zinc-500 mb-1">Taxa Anual (Visitante)</div>
-            <div className="flex items-center gap-2">
-              <span className="text-zinc-400 font-medium">R$</span>
-              <input 
-                type="number" 
-                value={annualFeeAway} 
-                onChange={e => setAnnualFeeAway(Number(e.target.value))}
-                className="w-full bg-transparent text-2xl font-bold text-zinc-900 outline-none"
-              />
-            </div>
-          </div>
-          <div className="bg-emerald-50 p-4 rounded-xl border border-emerald-200 flex flex-col justify-center">
-            <div className="text-sm font-medium text-emerald-700 mb-1">Receita Anual Projetada (ARR)</div>
-            <div className="text-3xl font-bold text-emerald-600">
-              R$ {((metrics.activeHomeTeams * annualFeeHome) + (metrics.activeAwayTeams * annualFeeAway)).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
-            </div>
-          </div>
-        </div>
-
-        <div className="mb-6">
-          <h3 className="text-lg font-medium text-zinc-800 mb-4">Histórico de Assinaturas (Últimos 6 Meses)</h3>
-          <div className="h-64 w-full">
-            <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={0}>
-              <ComposedChart data={financialHistory} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f4f4f5" />
-                <XAxis dataKey="month" axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: '#71717a' }} />
-                <YAxis yAxisId="left" axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: '#71717a' }} tickFormatter={(value) => `R$ ${value}`} />
-                <YAxis yAxisId="right" orientation="right" axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: '#71717a' }} />
-                <Tooltip 
-                  formatter={(value: number, name: string) => {
-                    if (name === 'revenue') return [new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(value), 'Receita'];
-                    return [value, 'Assinaturas'];
-                  }}
-                  cursor={{ fill: '#f4f4f5' }}
-                  contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1)' }}
-                />
-                <Legend formatter={(value) => value === 'revenue' ? 'Receita' : 'Assinaturas'} />
-                <Bar yAxisId="left" dataKey="revenue" name="revenue" fill="#10b981" radius={[4, 4, 0, 0]} />
-                <Line yAxisId="right" type="monotone" dataKey="count" name="count" stroke="#3b82f6" strokeWidth={2} dot={{ r: 4 }} activeDot={{ r: 6 }} />
-              </ComposedChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
-
-        <div className="flex justify-end">
-          <button 
-            onClick={handleSaveFinancialConfig}
-            className="bg-emerald-500 hover:bg-emerald-600 text-white px-4 py-2 rounded-lg font-medium transition-colors"
-          >
-            Salvar Valores
-          </button>
         </div>
       </section>
 
@@ -1745,16 +1537,6 @@ export function AdminPanel() {
                             )}
                           </div>
                         </div>
-                      </div>
-                      <div className="text-right">
-                        <span className={cn(
-                          "px-2 py-1 text-xs font-medium rounded-full",
-                          team.subscription?.status === 'active' && team.subscription.expiresAt && !isNaN(new Date(team.subscription.expiresAt).getTime()) && new Date(team.subscription.expiresAt) > new Date()
-                            ? "bg-emerald-100 text-emerald-700"
-                            : "bg-red-100 text-red-700"
-                        )}>
-                          {team.subscription?.status === 'active' && team.subscription.expiresAt && !isNaN(new Date(team.subscription.expiresAt).getTime()) && new Date(team.subscription.expiresAt) > new Date() ? 'Ativo' : 'Inativo'}
-                        </span>
                       </div>
                     </li>
                   ))}

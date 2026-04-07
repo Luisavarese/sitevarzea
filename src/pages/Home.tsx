@@ -255,12 +255,6 @@ export function Home() {
     return <div className="flex justify-center py-12"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-emerald-500"></div></div>;
   }
 
-  const currentSub = myTeam?.subscription;
-  const isSubActive = currentSub?.status === 'active' && currentSub.expiresAt && !isNaN(new Date(currentSub.expiresAt).getTime()) && new Date(currentSub.expiresAt) > new Date();
-
-  const isTrial = currentSub?.plan === 'mandante_trial';
-  const trialDaysRemaining = isTrial && currentSub.expiresAt ? Math.ceil((new Date(currentSub.expiresAt).getTime() - new Date().getTime()) / (1000 * 60 * 60 * 24)) : 0;
-
   // Generate alerts
   const alerts = [];
   if (!myTeam) {
@@ -270,20 +264,6 @@ export function Home() {
       link: '/team'
     });
   } else {
-    if (!isSubActive) {
-      alerts.push({
-        type: 'error',
-        message: 'Sua assinatura está inativa. Assine um plano para buscar jogos e participar de campeonatos.',
-        link: '/subscription'
-      });
-    } else if (isTrial) {
-      alerts.push({
-        type: 'info',
-        message: `Seu time está no período de isenção (Mandante). Restam ${trialDaysRemaining} dias para o fim da isenção.`,
-        link: '/subscription'
-      });
-    }
-    
     if (pendingResultsCount > 0) {
       alerts.push({
         type: 'warning',
@@ -330,34 +310,6 @@ export function Home() {
           <h1 className="text-3xl font-bold tracking-tight text-zinc-900">Início</h1>
           <p className="text-zinc-500">Bem-vindo ao Várzea Brasil.</p>
         </div>
-        
-        {myTeam && (
-          <Link 
-            to="/subscription" 
-            className={`flex items-center gap-2 px-4 py-2 rounded-full text-sm font-medium transition-colors ${
-              isSubActive 
-                ? isTrial ? 'bg-blue-50 text-blue-600 hover:bg-blue-100' : 'bg-[#009c3b]/10 text-[#009c3b] hover:bg-[#009c3b]/20' 
-                : 'bg-red-50 text-red-600 hover:bg-red-100'
-            }`}
-          >
-            {isSubActive ? (
-              <>
-                {isTrial ? <Info className="w-4 h-4" /> : <CheckCircle2 className="w-4 h-4" />}
-                <span>
-                  {isTrial 
-                    ? `Isenção Ativa - Restam ${trialDaysRemaining} dias` 
-                    : `Assinatura Ativa (${currentSub.plan}) - Vence em ${currentSub.expiresAt && !isNaN(new Date(currentSub.expiresAt).getTime()) ? format(new Date(currentSub.expiresAt), 'dd/MM/yyyy') : 'Data Inválida'}`
-                  }
-                </span>
-              </>
-            ) : (
-              <>
-                <AlertCircle className="w-4 h-4" />
-                <span>Assinatura Inativa</span>
-              </>
-            )}
-          </Link>
-        )}
       </header>
 
       {/* Alerts Section */}

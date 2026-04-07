@@ -103,18 +103,6 @@ export function Competitions() {
 
     const teamDoc = await getDoc(doc(db, 'teams', userTeamId));
     const teamData = teamDoc.data();
-    const currentSub = teamData?.subscription;
-    const isActive = currentSub?.status === 'active' && new Date(currentSub.expiresAt) > new Date();
-
-    if (!isActive) {
-      showToast("Sua assinatura está inativa. Assine um plano para participar de festivais.", "error");
-      return;
-    }
-
-    if (side === 'home' && currentSub?.plan === 'visitante_free') {
-      showToast("Times visitantes não podem se inscrever como mandantes.", "error");
-      return;
-    }
 
     // Check if team is already in this game
     if (game.homeTeamId === userTeamId || game.awayTeamId === userTeamId) {

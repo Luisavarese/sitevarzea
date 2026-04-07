@@ -16,7 +16,6 @@ import { Competitions } from './pages/Competitions';
 import { AdminPanel } from './pages/AdminPanel';
 import { MyField } from './pages/MyField';
 import Ranking from './pages/Ranking';
-import { Subscription } from './pages/Subscription';
 
 // Initialize GA outside component if ID exists
 const gaMeasurementId = import.meta.env.VITE_GA_MEASUREMENT_ID;
@@ -60,7 +59,6 @@ export default function App() {
             <Route path="calendar" element={<Calendar />} />
             <Route path="ranking" element={<Ranking />} />
             <Route path="competitions" element={<Competitions />} />
-            <Route path="subscription" element={<Subscription />} />
             <Route path="admin" element={<ProtectedRoute requireAdmin><AdminPanel /></ProtectedRoute>} />
             <Route path="meu-campo" element={<ProtectedRoute><MyField /></ProtectedRoute>} />
           </Route>

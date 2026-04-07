@@ -40,7 +40,6 @@ export function Layout() {
     { name: 'Meu Time', href: '/team', icon: Users },
     { name: 'Calendário', href: '/calendar', icon: Calendar },
     { name: 'Ranking', href: '/ranking', icon: BarChart3 },
-    { name: 'Assinatura', href: '/subscription', icon: CreditCard },
   ];
 
   if (isAdmin) {
