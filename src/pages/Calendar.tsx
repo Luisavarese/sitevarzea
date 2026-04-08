@@ -862,7 +862,7 @@ export function Calendar() {
         lat: avail.lat,
         lng: avail.lng,
         status: 'pending',
-        scheduledById: user.uid,
+        scheduledById: myTeamId,
         createdAt: new Date().toISOString()
       };
 
@@ -982,21 +982,23 @@ export function Calendar() {
       const opponentTeamId = match.homeTeamId === myTeamId ? match.awayTeamId : match.homeTeamId;
       
       // Fetch opponent team to get managerId
-      const opponentTeamSnap = await getDoc(doc(db, 'teams', opponentTeamId));
-      if (opponentTeamSnap.exists()) {
-        const opponentTeamData = opponentTeamSnap.data();
-        const opponentManagerId = opponentTeamData.managerId;
-        const matchDateObj = new Date(match.date ? (match.date.includes('T') ? match.date : match.date + 'T12:00:00Z') : new Date());
-        const matchDateStr = isNaN(matchDateObj.getTime()) ? (match.date || '') : format(matchDateObj, "dd/MM/yyyy 'às' HH:mm");
-        
-        await sendNotification({
-          userId: opponentManagerId,
-          title: newStatus === 'confirmed' ? 'Jogo Confirmado!' : 'Jogo Recusado/Cancelado',
-          message: `O time ${myTeam?.name} ${newStatus === 'confirmed' ? 'aceitou' : 'recusou/cancelou'} o jogo do dia ${matchDateStr}.`,
-          link: '/calendar',
-          type: newStatus === 'confirmed' ? 'success' : 'error',
-          userPhone: opponentTeamData.whatsapp
-        });
+      if (opponentTeamId) {
+        const opponentTeamSnap = await getDoc(doc(db, 'teams', opponentTeamId));
+        if (opponentTeamSnap.exists()) {
+          const opponentTeamData = opponentTeamSnap.data();
+          const opponentManagerId = opponentTeamData.managerId;
+          const matchDateObj = new Date(match.date ? (match.date.includes('T') ? match.date : match.date + 'T12:00:00Z') : new Date());
+          const matchDateStr = isNaN(matchDateObj.getTime()) ? (match.date || '') : format(matchDateObj, "dd/MM/yyyy 'às' HH:mm");
+          
+          await sendNotification({
+            userId: opponentManagerId,
+            title: newStatus === 'confirmed' ? 'Jogo Confirmado!' : 'Jogo Recusado/Cancelado',
+            message: `O time ${myTeam?.name} ${newStatus === 'confirmed' ? 'aceitou' : 'recusou/cancelou'} o jogo do dia ${matchDateStr}.`,
+            link: '/calendar',
+            type: newStatus === 'confirmed' ? 'success' : 'error',
+            userPhone: opponentTeamData.whatsapp
+          });
+        }
       }
 
       if (newStatus === 'confirmed') {
@@ -1020,10 +1022,9 @@ export function Calendar() {
             const dataDateObj = new Date(data.date ? (data.date.includes('T') ? data.date : data.date + 'T12:00:00Z') : new Date());
             if (!data.date || isNaN(dataDateObj.getTime())) return false;
             const isSameDate = format(dataDateObj, 'yyyy-MM-dd') === matchDateStr;
-            const involvesHomeTeam = data.homeTeamId === confirmedMatch.homeTeamId || data.awayTeamId === confirmedMatch.homeTeamId;
-            const involvesAwayTeam = data.homeTeamId === confirmedMatch.awayTeamId || data.awayTeamId === confirmedMatch.awayTeamId;
+            const involvesMyTeam = data.homeTeamId === myTeamId || data.awayTeamId === myTeamId;
             
-            return isSameDate && (involvesHomeTeam || involvesAwayTeam);
+            return isSameDate && involvesMyTeam;
           });
 
           // Cancel them in DB and state
@@ -1179,159 +1180,175 @@ export function Calendar() {
     });
 
   const handleContestSubmit = async () => {
-    if (!contestModal || !contestReason.trim()) return;
-    
-    const match = myMatches.find(m => m.id === contestModal.matchId);
-    if (!match) return;
+    try {
+      if (!contestModal || !contestReason.trim()) return;
+      
+      const match = myMatches.find(m => m.id === contestModal.matchId);
+      if (!match) return;
 
-    const collectionName = match.isFestival ? 'festivalGames' : 'matches';
-    const opponentTeamId = match.homeTeamId === myTeamId ? match.awayTeamId : match.homeTeamId;
-    const opponentTeamSnap = await getDoc(doc(db, 'teams', opponentTeamId));
-    
-    let whatsappLink = '';
-    let opponentManagerId = '';
-    if (myTeam?.whatsapp) {
-      const phone = myTeam.whatsapp.replace(/\D/g, '');
-      whatsappLink = `https://wa.me/55${phone}`;
-    }
-
-    if (opponentTeamSnap.exists()) {
-      const opponentTeamData = opponentTeamSnap.data();
-      opponentManagerId = opponentTeamData.managerId;
-    }
-
-    if (contestModal.quadroIndex !== undefined && match.quadros) {
-      if (contestHomeScore === '' || contestAwayScore === '') {
-        showToast("Preencha o placar correto para contestar", "error");
-        return;
+      const collectionName = match.isFestival ? 'festivalGames' : 'matches';
+      const opponentTeamId = match.homeTeamId === myTeamId ? match.awayTeamId : match.homeTeamId;
+      
+      let whatsappLink = '';
+      let opponentManagerId = '';
+      let opponentTeamSnap = null;
+      
+      if (myTeam?.whatsapp) {
+        const phone = myTeam.whatsapp.replace(/\D/g, '');
+        whatsappLink = `https://wa.me/55${phone}`;
       }
 
-      // Contesting a specific quadro
-      const newQuadros = [...match.quadros];
-      newQuadros[contestModal.quadroIndex] = { 
-        ...newQuadros[contestModal.quadroIndex], 
-        homeScore: parseInt(contestHomeScore),
-        awayScore: parseInt(contestAwayScore),
-        status: 'pending_confirmation', 
-        contestReason,
-        submittedBy: myTeamId,
-        submittedAt: new Date().toISOString()
-      };
-      
-      const allProcessed = newQuadros.every(q => q.status === 'confirmed');
-      const newResultStatus = allProcessed ? 'confirmed' : 'pending_confirmation';
-      
-      let totalHomePoints = 0;
-      let totalAwayPoints = 0;
-      
-      newQuadros.forEach(q => {
-        const hs = q.homeScore;
-        const as = q.awayScore;
-        if (hs > as) totalHomePoints += 3;
-        else if (as > hs) totalAwayPoints += 3;
-        else { totalHomePoints += 1; totalAwayPoints += 1; }
-      });
+      if (opponentTeamId) {
+        opponentTeamSnap = await getDoc(doc(db, 'teams', opponentTeamId));
+        if (opponentTeamSnap.exists()) {
+          const opponentTeamData = opponentTeamSnap.data();
+          opponentManagerId = opponentTeamData.managerId;
+        }
+      }
 
-      await updateDoc(doc(db, collectionName, match.id), { 
-        quadros: newQuadros,
-        homeScore: totalHomePoints,
-        awayScore: totalAwayPoints,
-        resultStatus: newResultStatus,
-        resultSubmittedBy: myTeamId,
-        resultSubmittedAt: new Date().toISOString()
-      });
-      
-      setMyMatches(myMatches.map(m => m.id === match.id ? { 
-        ...m, 
-        quadros: newQuadros, 
-        homeScore: totalHomePoints,
-        awayScore: totalAwayPoints,
-        resultStatus: newResultStatus,
-        resultSubmittedBy: myTeamId,
-        resultSubmittedAt: new Date().toISOString()
-      } : m));
-      
-      if (opponentManagerId) {
-        await sendNotification({
-          userId: opponentManagerId,
-          title: `Resultado do ${contestModal.quadroIndex + 1}º Quadro Contestado`,
-          message: `O time ${myTeam?.name} contestou o resultado do ${contestModal.quadroIndex + 1}º quadro e sugeriu um novo placar. Motivo: ${contestReason}.`,
-          link: '/calendar',
-          type: 'warning',
-          userPhone: opponentTeamSnap.data()?.whatsapp
+      if (contestModal.quadroIndex !== undefined && match.quadros) {
+        if (contestHomeScore === '' || contestAwayScore === '') {
+          showToast("Preencha o placar correto para contestar", "error");
+          return;
+        }
+
+        // Contesting a specific quadro
+        const newQuadros = [...match.quadros];
+        newQuadros[contestModal.quadroIndex] = { 
+          ...newQuadros[contestModal.quadroIndex], 
+          homeScore: parseInt(contestHomeScore),
+          awayScore: parseInt(contestAwayScore),
+          status: 'pending_confirmation', 
+          contestReason,
+          submittedBy: myTeamId,
+          submittedAt: new Date().toISOString()
+        };
+        
+        const allProcessed = newQuadros.every(q => q.status === 'confirmed');
+        const newResultStatus = allProcessed ? 'confirmed' : 'pending_confirmation';
+        
+        let totalHomePoints = 0;
+        let totalAwayPoints = 0;
+        
+        newQuadros.forEach(q => {
+          const hs = q.homeScore;
+          const as = q.awayScore;
+          if (hs > as) totalHomePoints += 3;
+          else if (as > hs) totalAwayPoints += 3;
+          else { totalHomePoints += 1; totalAwayPoints += 1; }
         });
-      }
-      showToast(`Resultado do ${contestModal.quadroIndex + 1}º quadro contestado!`, "success");
-    } else {
-      // Contesting the whole match
-      await updateDoc(doc(db, collectionName, match.id), { 
-        resultStatus: 'contested',
-        contestReason
-      });
-      
-      setMyMatches(myMatches.map(m => m.id === match.id ? { ...m, resultStatus: 'contested', contestReason } : m));
-      
-      if (opponentManagerId) {
-        await sendNotification({
-          userId: opponentManagerId,
-          title: `Resultado do Jogo Contestado`,
-          message: `O time ${myTeam?.name} contestou o resultado do jogo. Motivo: ${contestReason}. ${whatsappLink ? `Por favor, entre em contato pelo WhatsApp para alinhar o resultado correto: ${whatsappLink}` : 'Por favor, entre em contato com o responsável para alinhar o resultado correto.'}`,
-          link: '/calendar',
-          type: 'warning',
-          userPhone: opponentTeamSnap.data()?.whatsapp
-        });
-      }
-      showToast("Resultado contestado.", "success");
-    }
 
-    setContestModal(null);
-    setContestReason('');
-    setContestHomeScore('');
-    setContestAwayScore('');
+        await updateDoc(doc(db, collectionName, match.id), { 
+          quadros: newQuadros,
+          homeScore: totalHomePoints,
+          awayScore: totalAwayPoints,
+          resultStatus: newResultStatus,
+          resultSubmittedBy: myTeamId,
+          resultSubmittedAt: new Date().toISOString()
+        });
+        
+        setMyMatches(myMatches.map(m => m.id === match.id ? { 
+          ...m, 
+          quadros: newQuadros, 
+          homeScore: totalHomePoints,
+          awayScore: totalAwayPoints,
+          resultStatus: newResultStatus,
+          resultSubmittedBy: myTeamId,
+          resultSubmittedAt: new Date().toISOString()
+        } : m));
+        
+        if (opponentManagerId && opponentTeamSnap) {
+          await sendNotification({
+            userId: opponentManagerId,
+            title: `Resultado do ${contestModal.quadroIndex + 1}º Quadro Contestado`,
+            message: `O time ${myTeam?.name} contestou o resultado do ${contestModal.quadroIndex + 1}º quadro e sugeriu um novo placar. Motivo: ${contestReason}.`,
+            link: '/calendar',
+            type: 'warning',
+            userPhone: opponentTeamSnap.data()?.whatsapp
+          });
+        }
+        showToast(`Resultado do ${contestModal.quadroIndex + 1}º quadro contestado!`, "success");
+      } else {
+        // Contesting the whole match
+        await updateDoc(doc(db, collectionName, match.id), { 
+          resultStatus: 'contested',
+          contestReason
+        });
+        
+        setMyMatches(myMatches.map(m => m.id === match.id ? { ...m, resultStatus: 'contested', contestReason } : m));
+        
+        if (opponentManagerId && opponentTeamSnap) {
+          await sendNotification({
+            userId: opponentManagerId,
+            title: `Resultado do Jogo Contestado`,
+            message: `O time ${myTeam?.name} contestou o resultado do jogo. Motivo: ${contestReason}. ${whatsappLink ? `Por favor, entre em contato pelo WhatsApp para alinhar o resultado correto: ${whatsappLink}` : 'Por favor, entre em contato com o responsável para alinhar o resultado correto.'}`,
+            link: '/calendar',
+            type: 'warning',
+            userPhone: opponentTeamSnap.data()?.whatsapp
+          });
+        }
+        showToast("Resultado contestado.", "success");
+      }
+
+      setContestModal(null);
+      setContestReason('');
+      setContestHomeScore('');
+      setContestAwayScore('');
+    } catch (error) {
+      console.error("Error in handleContestSubmit:", error);
+      showToast("Erro ao enviar contestação.", "error");
+    }
   };
 
   const handleQuadroAction = async (match: Match, quadroIndex: number, action: 'confirmed' | 'contested') => {
-    if (action === 'contested') {
-      setContestModal({ matchId: match.id, quadroIndex });
-      return;
-    }
+    try {
+      if (action === 'contested') {
+        setContestModal({ matchId: match.id, quadroIndex });
+        return;
+      }
 
-    if (!match.quadros) return;
-    
-    const newQuadros = [...match.quadros];
-    newQuadros[quadroIndex] = { ...newQuadros[quadroIndex], status: action };
-    
-    // Check if all quadros are processed
-    const allProcessed = newQuadros.every(q => q.status === 'confirmed' || q.status === 'contested');
-    const anyContested = newQuadros.some(q => q.status === 'contested');
-    
-    const newResultStatus = allProcessed ? (anyContested ? 'contested' : 'confirmed') : 'pending_confirmation';
-    
-    const collectionName = match.isFestival ? 'festivalGames' : 'matches';
-    await updateDoc(doc(db, collectionName, match.id), { 
-      quadros: newQuadros,
-      resultStatus: newResultStatus
-    });
-    
-    setMyMatches(myMatches.map(m => m.id === match.id ? { ...m, quadros: newQuadros, resultStatus: newResultStatus } : m));
-    
-    // Send notification
-    const opponentTeamId = match.homeTeamId === myTeamId ? match.awayTeamId : match.homeTeamId;
-    const opponentTeamSnap = await getDoc(doc(db, 'teams', opponentTeamId));
-    if (opponentTeamSnap.exists()) {
-      const opponentTeamData = opponentTeamSnap.data();
-      const opponentManagerId = opponentTeamData.managerId;
-      await sendNotification({
-        userId: opponentManagerId,
-        title: `Resultado do ${quadroIndex + 1}º Quadro ${action === 'confirmed' ? 'Confirmado' : 'Contestado'}`,
-        message: `O time ${myTeam?.name} ${action === 'confirmed' ? 'confirmou' : 'contestou'} o resultado do ${quadroIndex + 1}º quadro.`,
-        link: '/calendar',
-        type: action === 'confirmed' ? 'success' : 'warning',
-        userPhone: opponentTeamData.whatsapp
+      if (!match.quadros) return;
+      
+      const newQuadros = [...match.quadros];
+      newQuadros[quadroIndex] = { ...newQuadros[quadroIndex], status: action };
+      
+      // Check if all quadros are processed
+      const allProcessed = newQuadros.every(q => q.status === 'confirmed' || q.status === 'contested');
+      const anyContested = newQuadros.some(q => q.status === 'contested');
+      
+      const newResultStatus = allProcessed ? (anyContested ? 'contested' : 'confirmed') : 'pending_confirmation';
+      
+      const collectionName = match.isFestival ? 'festivalGames' : 'matches';
+      await updateDoc(doc(db, collectionName, match.id), { 
+        quadros: newQuadros,
+        resultStatus: newResultStatus
       });
+      
+      setMyMatches(myMatches.map(m => m.id === match.id ? { ...m, quadros: newQuadros, resultStatus: newResultStatus } : m));
+      
+      // Send notification
+      const opponentTeamId = match.homeTeamId === myTeamId ? match.awayTeamId : match.homeTeamId;
+      if (opponentTeamId) {
+        const opponentTeamSnap = await getDoc(doc(db, 'teams', opponentTeamId));
+        if (opponentTeamSnap.exists()) {
+          const opponentTeamData = opponentTeamSnap.data();
+          const opponentManagerId = opponentTeamData.managerId;
+          await sendNotification({
+            userId: opponentManagerId,
+            title: `Resultado do ${quadroIndex + 1}º Quadro ${action === 'confirmed' ? 'Confirmado' : 'Contestado'}`,
+            message: `O time ${myTeam?.name} ${action === 'confirmed' ? 'confirmou' : 'contestou'} o resultado do ${quadroIndex + 1}º quadro.`,
+            link: '/calendar',
+            type: action === 'confirmed' ? 'success' : 'warning',
+            userPhone: opponentTeamData.whatsapp
+          });
+        }
+      }
+      
+      showToast(`Resultado do ${quadroIndex + 1}º quadro ${action === 'confirmed' ? 'confirmado' : 'contestado'}!`, "success");
+    } catch (error) {
+      console.error("Error in handleQuadroAction:", error);
+      showToast("Erro ao processar ação do quadro.", "error");
     }
-    
-    showToast(`Resultado do ${quadroIndex + 1}º quadro ${action === 'confirmed' ? 'confirmado' : 'contestado'}!`, "success");
   };
 
   return (
@@ -1732,7 +1749,7 @@ export function Calendar() {
                 const isHome = match.homeTeamId === myTeamId;
                 const opponentId = isHome ? match.awayTeamId : match.homeTeamId;
                 const isPending = match.status === 'pending';
-                const iRequested = match.scheduledById === user?.uid;
+                const iRequested = match.scheduledById === myTeamId || match.scheduledById === user?.uid;
 
                 // Calculate dynamic distance if missing
                 let displayDistance = match.distance;
@@ -1957,10 +1974,15 @@ export function Calendar() {
                                 <div className="flex gap-2">
                                   <button 
                                     onClick={async () => {
-                                      const collectionName = match.isFestival ? 'festivalGames' : 'matches';
-                                      await updateDoc(doc(db, collectionName, match.id), { resultStatus: 'confirmed' });
-                                      setMyMatches(myMatches.map(m => m.id === match.id ? { ...m, resultStatus: 'confirmed' } : m));
-                                      showToast("Resultado confirmado!", "success");
+                                      try {
+                                        const collectionName = match.isFestival ? 'festivalGames' : 'matches';
+                                        await updateDoc(doc(db, collectionName, match.id), { resultStatus: 'confirmed' });
+                                        setMyMatches(myMatches.map(m => m.id === match.id ? { ...m, resultStatus: 'confirmed' } : m));
+                                        showToast("Resultado confirmado!", "success");
+                                      } catch (error) {
+                                        console.error("Error confirming result:", error);
+                                        showToast("Erro ao confirmar resultado.", "error");
+                                      }
                                     }}
                                     className="text-xs bg-emerald-500 hover:bg-emerald-600 text-white px-3 py-1.5 rounded-md font-medium transition-colors"
                                   >
@@ -2334,18 +2356,20 @@ export function Calendar() {
                           setMyMatches(myMatches.map(m => m.id === scoreModal.matchId ? { ...m, status: 'completed', homeScore: homeScoreVal, awayScore: awayScoreVal, woTeamId, resultStatus: 'pending_confirmation', resultSubmittedBy: myTeamId, resultSubmittedAt: new Date().toISOString() } : m));
                           
                           const opponentTeamId = match.homeTeamId === myTeamId ? match.awayTeamId : match.homeTeamId;
-                          const opponentTeamSnap = await getDoc(doc(db, 'teams', opponentTeamId));
-                          if (opponentTeamSnap.exists()) {
-                            const opponentTeamData = opponentTeamSnap.data();
-                            const opponentManagerId = opponentTeamData.managerId;
-                            await sendNotification({
-                              userId: opponentManagerId,
-                              title: 'Resultado de Jogo',
-                              message: `O time ${myTeam?.name} enviou o resultado do jogo (W.O.). Acesse para confirmar.`,
-                              link: '/calendar',
-                              type: 'info',
-                              userPhone: opponentTeamData.whatsapp
-                            });
+                          if (opponentTeamId) {
+                            const opponentTeamSnap = await getDoc(doc(db, 'teams', opponentTeamId));
+                            if (opponentTeamSnap.exists()) {
+                              const opponentTeamData = opponentTeamSnap.data();
+                              const opponentManagerId = opponentTeamData.managerId;
+                              await sendNotification({
+                                userId: opponentManagerId,
+                                title: 'Resultado de Jogo',
+                                message: `O time ${myTeam?.name} enviou o resultado do jogo (W.O.). Acesse para confirmar.`,
+                                link: '/calendar',
+                                type: 'info',
+                                userPhone: opponentTeamData.whatsapp
+                              });
+                            }
                           }
 
                           setScoreModal(null);
@@ -2423,18 +2447,20 @@ export function Calendar() {
                           } : m));
                           
                           const opponentTeamId = match.homeTeamId === myTeamId ? match.awayTeamId : match.homeTeamId;
-                          const opponentTeamSnap = await getDoc(doc(db, 'teams', opponentTeamId));
-                          if (opponentTeamSnap.exists()) {
-                            const opponentTeamData = opponentTeamSnap.data();
-                            const opponentManagerId = opponentTeamData.managerId;
-                            await sendNotification({
-                              userId: opponentManagerId,
-                              title: 'Resultado de Jogo',
-                              message: `O time ${myTeam?.name} enviou o resultado do jogo. Acesse para confirmar.`,
-                              link: '/calendar',
-                              type: 'info',
-                              userPhone: opponentTeamData.whatsapp
-                            });
+                          if (opponentTeamId) {
+                            const opponentTeamSnap = await getDoc(doc(db, 'teams', opponentTeamId));
+                            if (opponentTeamSnap.exists()) {
+                              const opponentTeamData = opponentTeamSnap.data();
+                              const opponentManagerId = opponentTeamData.managerId;
+                              await sendNotification({
+                                userId: opponentManagerId,
+                                title: 'Resultado de Jogo',
+                                message: `O time ${myTeam?.name} enviou o resultado do jogo. Acesse para confirmar.`,
+                                link: '/calendar',
+                                type: 'info',
+                                userPhone: opponentTeamData.whatsapp
+                              });
+                            }
                           }
 
                           setScoreModal(null);

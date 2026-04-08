@@ -306,47 +306,78 @@ export default function Ranking() {
       } else {
         if (match.resultStatus !== 'confirmed') return;
 
-        const homeScore = match.homeScore || 0;
-        const awayScore = match.awayScore || 0;
+        // For normal matches, we need to calculate points and goals from quadros
+        if (match.quadros && match.quadros.length > 0) {
+          match.quadros.forEach(q => {
+            if (q.status !== 'confirmed') return;
 
-        if (!homePlayedThisWeek) {
-          homeStats.played += 1;
-          homeStats.goalsFor += homeScore;
-          homeStats.goalsAgainst += awayScore;
-          homeStats.goalDifference = homeStats.goalsFor - homeStats.goalsAgainst;
-        }
+            if (!homePlayedThisWeek) homeStats.played += 1;
+            if (!awayPlayedThisWeek) awayStats.played += 1;
 
-        if (!awayPlayedThisWeek) {
-          awayStats.played += 1;
-          awayStats.goalsFor += awayScore;
-          awayStats.goalsAgainst += homeScore;
-          awayStats.goalDifference = awayStats.goalsFor - awayStats.goalsAgainst;
-        }
+            const qHomeGoals = q.homeScore || 0;
+            const qAwayGoals = q.awayScore || 0;
 
-        if (homeScore > awayScore) {
-          if (!homePlayedThisWeek) {
-            homeStats.points += 3;
-            homeStats.wins += 1;
-          }
-          if (!awayPlayedThisWeek) {
-            awayStats.losses += 1;
-          }
-        } else if (awayScore > homeScore) {
-          if (!awayPlayedThisWeek) {
-            awayStats.points += 3;
-            awayStats.wins += 1;
-          }
-          if (!homePlayedThisWeek) {
-            homeStats.losses += 1;
-          }
+            if (!homePlayedThisWeek) {
+              homeStats.goalsFor += qHomeGoals;
+              homeStats.goalsAgainst += qAwayGoals;
+            }
+
+            if (!awayPlayedThisWeek) {
+              awayStats.goalsFor += qAwayGoals;
+              awayStats.goalsAgainst += qHomeGoals;
+            }
+
+            if (qHomeGoals > qAwayGoals) {
+              if (!homePlayedThisWeek) {
+                homeStats.points += 3;
+                homeStats.wins += 1;
+              }
+              if (!awayPlayedThisWeek) {
+                awayStats.losses += 1;
+              }
+            } else if (qAwayGoals > qHomeGoals) {
+              if (!awayPlayedThisWeek) {
+                awayStats.points += 3;
+                awayStats.wins += 1;
+              }
+              if (!homePlayedThisWeek) {
+                homeStats.losses += 1;
+              }
+            } else {
+              if (!homePlayedThisWeek) {
+                homeStats.points += 1;
+                homeStats.draws += 1;
+              }
+              if (!awayPlayedThisWeek) {
+                awayStats.points += 1;
+                awayStats.draws += 1;
+              }
+            }
+          });
+
+          if (!homePlayedThisWeek) homeStats.goalDifference = homeStats.goalsFor - homeStats.goalsAgainst;
+          if (!awayPlayedThisWeek) awayStats.goalDifference = awayStats.goalsFor - awayStats.goalsAgainst;
         } else {
+          // Fallback if no quadros (e.g. W.O.)
+          const homePoints = match.homeScore || 0;
+          const awayPoints = match.awayScore || 0;
+
           if (!homePlayedThisWeek) {
-            homeStats.points += 1;
-            homeStats.draws += 1;
+            homeStats.played += 1;
+            homeStats.points += homePoints;
+            
+            if (homePoints === 3) homeStats.wins += 1;
+            else if (homePoints === 1) homeStats.draws += 1;
+            else homeStats.losses += 1;
           }
+
           if (!awayPlayedThisWeek) {
-            awayStats.points += 1;
-            awayStats.draws += 1;
+            awayStats.played += 1;
+            awayStats.points += awayPoints;
+            
+            if (awayPoints === 3) awayStats.wins += 1;
+            else if (awayPoints === 1) awayStats.draws += 1;
+            else awayStats.losses += 1;
           }
         }
       }
