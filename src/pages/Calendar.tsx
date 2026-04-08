@@ -21,6 +21,7 @@ interface Availability {
   createdAt: string;
   teamName?: string;
   logoUrl?: string;
+  managerId?: string;
   estado?: string;
   cidade?: string;
   bairro?: string;
@@ -361,6 +362,7 @@ export function Calendar() {
               ...data, 
               teamName: oppTeam?.name,
               logoUrl: oppTeam?.logoUrl,
+              managerId: oppTeam?.managerId,
               gameType: oppTeam?.gameType,
               uniformColor: oppTeam?.uniformColor,
               teamLevel: oppTeam?.teamLevel,
@@ -836,6 +838,12 @@ export function Calendar() {
       console.error("Invalid start time", e);
     }
 
+    if (avail.managerId === user.uid) {
+      showToast("Você não pode convidar seu próprio time.", "error");
+      setConfirmMatch(null);
+      return;
+    }
+
     // Check if there's already a match with this team on this date
     const existingMatch = myMatches.find(m => {
       const isSameOpponent = m.homeTeamId === avail.teamId || m.awayTeamId === avail.teamId;
@@ -852,19 +860,20 @@ export function Calendar() {
     try {
       const distance = calculateDistance(avail.lat, avail.lng, avail.matchedMyAvail.lat, avail.matchedMyAvail.lng) || undefined;
 
-      const newMatch = {
+      const newMatch: any = {
         homeTeamId: avail.type === 'away' ? myTeamId : avail.teamId,
         awayTeamId: avail.type === 'away' ? avail.teamId : myTeamId,
         date: nextDate.toISOString(),
         endTime: avail.endTime || '00:00',
         location: formatLocation(avail),
-        distance: distance,
-        lat: avail.lat,
-        lng: avail.lng,
         status: 'pending',
-        scheduledById: myTeamId,
+        scheduledById: user.uid,
         createdAt: new Date().toISOString()
       };
+
+      if (distance !== undefined) newMatch.distance = distance;
+      if (avail.lat !== undefined && avail.lat !== null) newMatch.lat = avail.lat;
+      if (avail.lng !== undefined && avail.lng !== null) newMatch.lng = avail.lng;
 
       const docRef = await addDoc(collection(db, 'matches'), newMatch);
       
@@ -1099,7 +1108,7 @@ export function Calendar() {
   };
 
   const otherAvailabilitiesWithMatch = availabilities
-    .filter(a => a.teamId !== myTeamId)
+    .filter(a => a.teamId !== myTeamId && a.managerId !== user?.uid)
     .filter(a => {
       if (!searchQuery.trim()) return true;
       return a.teamName?.toLowerCase().includes(searchQuery.toLowerCase());
